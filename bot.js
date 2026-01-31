@@ -88,15 +88,6 @@ const RAMADAN_TIMES = {
   }
 };
 
-// Функция получения базы данных (используется в sendRamadanReminder)
-function getDB() {
-  // Предполагаем что в db.js экспортируется функция или переменная для доступа к БД
-  // Если у вас другая структура - измените соответственно
-  const { MongoClient } = require('mongodb');
-  const client = new MongoClient(process.env.MONGODB_URI);
-  return client.db('imantap');
-}
-
 // Функция отправки Рамазан уведомлений
 async function sendRamadanReminder(reminderType, reminderData) {
   try {
