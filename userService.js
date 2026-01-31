@@ -478,13 +478,27 @@ export async function getUserAccess(userId) {
   };
 }
 
+// =====================================================
+// ЭКСПОРТЫ
+// =====================================================
+
 export {
+  // Основные функции
   getOrCreateUser,
   getUserById,
   getUserByPromoCode,
   incrementReferralCount,
-  updateUsername,
-  generatePromoCode,
   updateUserProgress,
-  getUserFullData
+  getUserFullData,
+  
+  // Новые функции онбординга и оплаты
+  updateUserOnboarding,
+  checkPromoCode,
+  markPromoCodeAsUsed,
+  updatePaymentStatus,
+  approvePayment,
+  rejectPayment,
+  getUserAccess,
+  getPendingPayments,
+  checkDemoExpiration
 };
