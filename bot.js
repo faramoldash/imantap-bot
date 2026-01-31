@@ -2,7 +2,7 @@
 import TelegramBot from 'node-telegram-bot-api';
 import http from 'http';
 import dotenv from 'dotenv';
-import { connectDB } from './db.js';
+import { connectDB, getDB } from './db.js';
 import {
   getOrCreateUser,
   getUserById,
@@ -11,6 +11,7 @@ import {
   updateUserProgress,
   getUserFullData
 } from './userService.js';
+import schedule from 'node-schedule';
 
 
 dotenv.config();
@@ -45,6 +46,163 @@ bot.deleteWebHook().then(() => {
 
 // Подключение к MongoDB
 await connectDB();
+
+// =====================================================
+// 🌙 РАМАЗАН УВЕДОМЛЕНИЯ - Сәхәр и Ифтар
+// =====================================================
+
+const RAMADAN_TIMES = {
+  suhur: {
+    hour: 5,
+    minute: 15, // За 10 минут до Фаджр (05:25)
+    name_kk: 'Ауыз бекітетін уақыт',
+    emoji: '🌙',
+    message: `🌙 *Ауыз бекітетін уақыт болды*
+
+Сәресіде айтылатын дұға:
+
+نَوَيْتُ أنْ أصُومَ صَوْمَ شَهْرُ رَمَضَانَ مِنَ الْفَجْرِ إِلَى الْمَغْرِبِ خَالِصًا لِلَّهِ تَعَالَى
+
+*Оқылуы:* «Нәуәйту ән асумә саумә шәһри Рамаданә минәл фәжри иләл мағриби халисан лилләһи таъалә».
+
+*Мағынасы:* «Таңертеннен кешке дейін Алланың ризалығы үшін Рамазан айының оразасын ұстауға ниет еттім».
+
+Алла Тағала оразаңызды қабыл етсін! 🤲`
+  },
+  iftar: {
+    hour: 18,
+    minute: 45, // Магриб намаз уақыты
+    name_kk: 'Ауызашар уақыты',
+    emoji: '🍽️',
+    message: `🍽️ *Ауызашар уақыты жақындап қалды*
+
+Ауызашарда оқылатын дұға:
+
+اللَّهُمَّ لَكَ صُمْتُ وَ بِكَ آمَنْتُ وَ عَلَيْكَ تَوَكَّلْتُ وَ على رِزْقِكَ اَفْطَرْتُ وَ صَوْمَ الْغَدِ مِنْ شَهْرِرَمَضانَ نَوَيْتُ فاغْفِرْ لِي ما قَدَّمْتُ وَ ما اَخَّرْتُ
+
+*Оқылуы:* «Аллаһуммә ләкә сумту уә бикә әәмәнту уә 'аләйкә тәуәккәлту уә 'ала ризқикә әфтарту уә саумәлғади мин шәһри Рамадана нәуәйту, фәғфирлии мәә қаддамту уә мәә аххарту».
+
+*Мағынасы:* «Алла Тағалам! Сенің ризалығың үшін ораза ұстадым. Сенің берген ризығыңмен аузымды аштым. Саған иман етіп, саған тәуекел жасадым. Рамазан айының ертеңгі күніне де ауыз бекітуге ниет еттім. Сен менің өткен және келешек күнәларымды кешір».
+
+Ас-сәлем! 🤲`
+  }
+};
+
+// Функция получения базы данных (используется в sendRamadanReminder)
+function getDB() {
+  // Предполагаем что в db.js экспортируется функция или переменная для доступа к БД
+  // Если у вас другая структура - измените соответственно
+  const { MongoClient } = require('mongodb');
+  const client = new MongoClient(process.env.MONGODB_URI);
+  return client.db('imantap');
+}
+
+// Функция отправки Рамазан уведомлений
+async function sendRamadanReminder(reminderType, reminderData) {
+  try {
+    const db = getDB();
+    const users = db.collection('users');
+    
+    // Получаем активных пользователей (заходили за последние 3 дня)
+    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    const activeUsers = await users.find({
+      createdAt: { $gte: threeDaysAgo }
+    }).toArray();
+    
+    console.log(`${reminderData.emoji} Отправка уведомлений: ${reminderData.name_kk}. Пользователей: ${activeUsers.length}`);
+    
+    let successCount = 0;
+    let errorCount = 0;
+    
+    for (const user of activeUsers) {
+      try {
+        await bot.sendMessage(
+          user.userId, 
+          reminderData.message,
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [[
+                { 
+                  text: '✅ Жасалды', 
+                  callback_data: `ramadan_${reminderType}_done` 
+                }
+              ]]
+            }
+          }
+        );
+        
+        successCount++;
+        
+        // Задержка 100ms между отправками
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (error) {
+        errorCount++;
+        console.error(`Ошибка отправки ${user.userId}:`, error.message);
+      }
+    }
+    
+    console.log(`✅ Отправлено. Успешно: ${successCount}, Ошибок: ${errorCount}`);
+  } catch (error) {
+    console.error('❌ Ошибка отправки уведомлений:', error);
+  }
+}
+
+// Планируем уведомления
+console.log('⏰ Настройка расписания Рамазан уведомлений...');
+
+Object.entries(RAMADAN_TIMES).forEach(([reminderType, reminderData]) => {
+  // Cron формат: минута час * * * (каждый день)
+  const cronExpression = `${reminderData.minute} ${reminderData.hour} * * *`;
+  
+  schedule.scheduleJob(cronExpression, () => {
+    console.log(`⏰ Время отправки: ${reminderData.name_kk}`);
+    sendRamadanReminder(reminderType, reminderData);
+  });
+  
+  console.log(`   ✓ ${reminderData.emoji} ${reminderData.name_kk}: ${String(reminderData.hour).padStart(2, '0')}:${String(reminderData.minute).padStart(2, '0')}`);
+});
+
+console.log('✅ Расписание Рамазан уведомлений настроено!\n');
+
+// =====================================================
+// 🎯 ОБРАБОТКА CALLBACK КНОПОК
+// =====================================================
+
+bot.on('callback_query', async (query) => {
+  const chatId = query.message.chat.id;
+  const messageId = query.message.message_id;
+  const data = query.data;
+  
+  console.log(`📲 Callback: ${data} от ${query.from.id}`);
+  
+  // Обработка кнопки "Жасалды"
+  if (data.startsWith('ramadan_')) {
+    const [_, type, action] = data.split('_');
+    
+    if (action === 'done') {
+      try {
+        await bot.answerCallbackQuery(query.id, {
+          text: 'МашаАллаһ! ✅',
+          show_alert: false
+        });
+        
+        await bot.editMessageText(
+          query.message.text + '\n\n✅ *Жасалды!*', 
+          {
+            chat_id: chatId,
+            message_id: messageId,
+            parse_mode: 'Markdown'
+          }
+        );
+        
+        console.log(`✅ Пользователь ${query.from.id} подтвердил: ${type}`);
+      } catch (error) {
+        console.error('❌ Ошибка обработки callback:', error);
+      }
+    }
+  }
+});
 
 // ===== КОМАНДЫ БОТА =====
 
