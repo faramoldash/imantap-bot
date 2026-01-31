@@ -37,7 +37,6 @@ import {
 } from './sessionManager.js';
 import schedule from 'node-schedule';
 
-
 dotenv.config();
 
 // Валидация переменных окружения
@@ -67,7 +66,6 @@ bot.deleteWebHook().then(() => {
   console.log('ℹ️ Webhook не был установлен, используется polling');
 });
 
-
 // Подключение к MongoDB
 await connectDB();
 
@@ -80,8 +78,8 @@ await createIndexes();
 
 const RAMADAN_TIMES = {
   suhur: {
-    hour: 1,
-    minute: 11, // За 10 минут до Фаджр (05:25)
+    hour: 5,
+    minute: 15, // За 10 минут до Фаджр (05:25)
     name_kk: 'Ауыз бекітетін уақыт',
     emoji: '🌙',
     message: `🌙 *Ауыз бекітетін уақыт болды*
@@ -233,13 +231,13 @@ bot.on('callback_query', async (query) => {
     
     await bot.sendMessage(
       chatId,
-      `📸 *Отправьте чек об оплате*\n\n` +
-      `Это может быть:\n` +
-      `• Скриншот из Kaspi\n` +
-      `• Фото квитанции\n` +
-      `• PDF документ\n` +
-      `• Подтверждение перевода\n\n` +
-      `Просто отправьте файл сюда 👇`,
+      `📸 *Төлем чегін жіберіңіз*\n\n` +
+      `Бұл мыналар болуы мүмкін:\n` +
+      `• Kaspi-ден скриншот\n` +
+      `• Квитанция фотосы\n` +
+      `• PDF құжат\n` +
+      `• Аударым растамасы\n\n` +
+      `Файлды осында жіберіңіз 👇`,
       { parse_mode: 'Markdown' }
     );
 
@@ -265,7 +263,7 @@ bot.on('callback_query', async (query) => {
     try {
       await approvePayment(targetUserId);
 
-      // Обновляем сообщение
+      // Обновляем сообщение админа
       const originalCaption = query.message.caption || '';
       await bot.editMessageCaption(
         `✅ *ОПЛАТА ПОДТВЕРЖДЕНА*\n\n` +
@@ -281,12 +279,12 @@ bot.on('callback_query', async (query) => {
 
       await bot.answerCallbackQuery(query.id, { text: '✅ Оплата подтверждена!' });
 
-      // Уведомляем пользователя
+      // Уведомляем пользователя (НА КАЗАХСКОМ!)
       await bot.sendMessage(
         targetUserId,
-        `🎉 *Оплата подтверждена!*\n\n` +
-        `Добро пожаловать в Imantap Premium! 🌙\n\n` +
-        `Откройте ваш персональный трекер:`,
+        `🎉 *Төлем расталды!*\n\n` +
+        `ImanTap Premium-ға қош келдіңіз! 🌙\n\n` +
+        `Жеке трекеріңізді ашыңыз:`,
         {
           parse_mode: 'Markdown',
           reply_markup: {
@@ -310,9 +308,9 @@ bot.on('callback_query', async (query) => {
           
           await bot.sendMessage(
             inviter.userId,
-            `🎁 *Новый реферал!*\n\n` +
-            `Ваш друг оплатил доступ.\n` +
-            `Всего рефералов: ${inviter.invitedCount + 1} 🔥`,
+            `🎁 *Жаңа реферал!*\n\n` +
+            `Сіздің досыңыз төлем жасады.\n` +
+            `Барлық рефералдар: ${inviter.invitedCount + 1} 🔥`,
             { parse_mode: 'Markdown' }
           );
         }
@@ -334,7 +332,7 @@ bot.on('callback_query', async (query) => {
     try {
       await rejectPayment(targetUserId);
 
-      // Обновляем сообщение
+      // Обновляем сообщение админа
       const originalCaption = query.message.caption || '';
       await bot.editMessageCaption(
         `❌ *ОПЛАТА ОТКЛОНЕНА*\n\n` +
@@ -350,16 +348,16 @@ bot.on('callback_query', async (query) => {
 
       await bot.answerCallbackQuery(query.id, { text: '❌ Оплата отклонена' });
 
-      // Уведомляем пользователя
+      // Уведомляем пользователя (НА КАЗАХСКОМ!)
       await bot.sendMessage(
         targetUserId,
-        `❌ *Оплата не подтверждена*\n\n` +
-        `К сожалению, мы не смогли подтвердить ваш платёж.\n\n` +
-        `Возможные причины:\n` +
-        `• Неверная сумма\n` +
-        `• Некорректный чек\n` +
-        `• Платёж не найден\n\n` +
-        `Пожалуйста, попробуйте снова или свяжитесь с поддержкой.`,
+        `❌ *Төлем расталмады*\n\n` +
+        `Өкінішке орай, төлеміңізді растай алмадық.\n\n` +
+        `Мүмкін себептері:\n` +
+        `• Сома дұрыс емес\n` +
+        `• Чек анық емес\n` +
+        `• Төлем табылмады\n\n` +
+        `Қайтадан көріңіз немесе қолдау қызметіне жазыңыз.`,
         { parse_mode: 'Markdown' }
       );
 
@@ -378,9 +376,9 @@ bot.on('callback_query', async (query) => {
 async function startOnboarding(chatId, userId, firstName) {
   await bot.sendMessage(
     chatId,
-    `🌙 *Ассаляму алейкум, ${firstName}!*\n\n` +
-    `Добро пожаловать в *Imantap* - ваш личный помощник на Рамазан.\n\n` +
-    `Настроим всё за 2 минуты! 🚀`,
+    `🌙 *Ассаляму Алейкум, ${firstName}!*\n\n` +
+    `Imantap-қа қош келдіңіз — Рамазанға арналған жеке көмекшіңіз.\n\n` +
+    `Барлығын 2 минутта баптаймыз! 🚀`,
     { parse_mode: 'Markdown' }
   );
 
@@ -390,13 +388,13 @@ async function startOnboarding(chatId, userId, firstName) {
   // Шаг 1: Запрос телефона
   await bot.sendMessage(
     chatId,
-    `📱 *Шаг 1/3: Номер телефона*\n\n` +
-    `Для персональных уведомлений и восстановления доступа.`,
+    `📱 *1/3-қадам: Телефон нөміріңіз*\n\n` +
+    `Жеке хабарламалар мен қолжетімділікті қалпына келтіру үшін қажет.`,
     {
       parse_mode: 'Markdown',
       reply_markup: {
         keyboard: [[{
-          text: '📱 Поделиться номером',
+          text: '📱 Нөмірді жіберу',
           request_contact: true
         }]],
         resize_keyboard: true,
@@ -411,16 +409,16 @@ async function startOnboarding(chatId, userId, firstName) {
 async function requestLocation(chatId, userId) {
   await bot.sendMessage(
     chatId,
-    `✅ Отлично!\n\n` +
-    `📍 *Шаг 2/3: Ваш город*\n\n` +
-    `Для точного времени намазов.`,
+    `✅ Керемет!\n\n` +
+    `📍 *2/3-қадам: Қалаңыз*\n\n` +
+    `Намаз уақыттарын дәл көрсету үшін геолокациямен бөлісіңіз.`,
     {
       parse_mode: 'Markdown',
       reply_markup: {
         keyboard: [
-          [{ text: '📍 Поделиться геолокацией', request_location: true }],
-          [{ text: '🌍 Astana' }, { text: '🌍 Almaty' }],
-          [{ text: '🌍 Shymkent' }, { text: '🌍 Другой город' }]
+          [{ text: '📍 Геолокацияны жіберу', request_location: true }],
+          [{ text: '🌍 Астана' }, { text: '🌍 Алматы' }],
+          [{ text: '🌍 Шымкент' }, { text: '🌍 Басқа қала' }]
         ],
         resize_keyboard: true
       }
@@ -443,13 +441,13 @@ async function requestPromoCode(chatId, userId) {
   // Нет реферала - спрашиваем промокод
   await bot.sendMessage(
     chatId,
-    `🎟️ *Шаг 3/3: Промокод*\n\n` +
-    `Есть промокод? Получите скидку -500₸!\n\n` +
-    `Введите промокод или нажмите "Пропустить"`,
+    `🎟️ *3/3-қадам: Промокод*\n\n` +
+    `Промокод бар болса, -500₸ жеңілдік алыңыз!\n\n` +
+    `Промокодты теріңіз немесе «Өткізіп жіберу» батырмасын басыңыз.`,
     {
       parse_mode: 'Markdown',
       reply_markup: {
-        keyboard: [['⏭️ Пропустить']],
+        keyboard: [['⏭️ Өткізіп жіберу']],
         resize_keyboard: true,
         one_time_keyboard: true
       }
@@ -468,21 +466,20 @@ async function showPayment(chatId, userId, price, hasDiscount) {
 
   await bot.sendMessage(
     chatId,
-    `💳 *Оплата доступа*\n\n` +
-    `Imantap Premium - ${discountText}\n` +
-    `✓ Персональные времена намазов\n` +
-    `✓ Трекинг 30 дней Рамазана\n` +
-    `✓ 99 имён Аллаха\n` +
-    `✓ Чтение Корана по джузам\n` +
-    `✓ Система наград и XP\n` +
+    `💳 *Imantap Premium-ға қолжетімділік*\n\n` +
+    `Бағасы — ${discountText}\n` +
+    `✓ Рамазанның 30 күніне арналған трекер\n` +
+    `✓ Алланың 99 есімі\n` +
+    `✓ Құранды пара бойынша оқу\n` +
+    `✓ Марапаттар мен XP жүйесі\n` +
     `✓ Лидерборд\n\n` +
-    `После оплаты отправьте чек сюда.`,
+    `Kaspi арқылы төлем жасап, чекті осында жіберіңіз.`,
     {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
-          [{ text: '💳 Оплатить через Kaspi', url: kaspiLink }],
-          [{ text: '📄 У меня есть чек', callback_data: 'have_receipt' }]
+          [{ text: '💳 Kaspi арқылы төлем', url: kaspiLink }],
+          [{ text: '📄 Менде чек бар', callback_data: 'have_receipt' }]
         ],
         remove_keyboard: true
       }
@@ -526,12 +523,12 @@ bot.on('location', async (msg) => {
     const { latitude, longitude } = msg.location;
 
     // Простое определение города (можно улучшить с API)
-    let city = 'Astana';
+    let city = 'Астана';
     
     await updateUserOnboarding(userId, {
       location: {
         city,
-        country: 'Kazakhstan',
+        country: 'Қазақстан',
         latitude,
         longitude
       }
@@ -557,10 +554,10 @@ bot.on('message', async (msg) => {
   if (state === 'WAITING_LOCATION') {
     let city = text.replace('🌍 ', '').trim();
 
-    if (city === 'Другой город') {
+    if (city === 'Басқа қала') {
       await bot.sendMessage(
         chatId,
-        'Введите название вашего города:',
+        'Қалаңыздың атауын жазыңыз:',
         { reply_markup: { remove_keyboard: true } }
       );
       setState(userId, 'WAITING_CITY_NAME');
@@ -570,7 +567,7 @@ bot.on('message', async (msg) => {
     await updateUserOnboarding(userId, {
       location: {
         city,
-        country: 'Kazakhstan',
+        country: 'Қазақстан',
         latitude: null,
         longitude: null
       }
@@ -587,7 +584,7 @@ bot.on('message', async (msg) => {
     await updateUserOnboarding(userId, {
       location: {
         city,
-        country: 'Kazakhstan',
+        country: 'Қазақстан',
         latitude: null,
         longitude: null
       }
@@ -599,7 +596,7 @@ bot.on('message', async (msg) => {
 
   // Обработка промокода
   if (state === 'WAITING_PROMO') {
-    if (text === '⏭️ Пропустить') {
+    if (text === '⏭️ Өткізіп жіберу') {
       await showPayment(chatId, userId, 2490, false);
       return;
     }
@@ -619,26 +616,26 @@ bot.on('message', async (msg) => {
 
       await bot.sendMessage(
         chatId,
-        `✅ *Промокод принят!*\n\n` +
-        `Ваша цена: ~~2490₸~~ → *1990₸*`,
+        `✅ *Промокод қабылданды!*\n\n` +
+        `Сіздің бағаңыз: ~~2490₸~~ → *1990₸*`,
         { parse_mode: 'Markdown' }
       );
 
       await showPayment(chatId, userId, 1990, true);
     } else {
-      let errorMsg = '❌ *Промокод недействителен*\n\n';
+      let errorMsg = '❌ *Промокод жарамсыз*\n\n';
 
       if (check.reason === 'not_found') {
-        errorMsg += 'Такой промокод не существует.';
+        errorMsg += 'Мұндай промокод табылмады.';
       } else if (check.reason === 'already_used') {
-        errorMsg += 'Этот промокод уже использован.';
+        errorMsg += 'Бұл промокод қолданылған.';
       } else if (check.reason === 'own_code') {
-        errorMsg += 'Нельзя использовать свой промокод.';
+        errorMsg += 'Өз промокодыңызды пайдалану мүмкін емес.';
       } else if (check.reason === 'owner_not_paid') {
-        errorMsg += 'Владелец промокода ещё не оплатил доступ.';
+        errorMsg += 'Бұл промокод иесі әлі төлем жасаған жоқ.';
       }
 
-      errorMsg += '\n\nПопробуйте другой или пропустите.';
+      errorMsg += '\n\nБасқа промокодты көріңіз немесе өткізіп жіберіңіз.';
 
       await bot.sendMessage(chatId, errorMsg, { parse_mode: 'Markdown' });
     }
@@ -662,7 +659,7 @@ bot.on('photo', async (msg) => {
 
     await handleReceipt(userId, chatId, fileId, 'photo');
   } else {
-    bot.sendMessage(chatId, 'Отправьте /start для начала работы.');
+    bot.sendMessage(chatId, 'Бастау үшін /start деп жазыңыз.');
   }
 });
 
@@ -686,14 +683,14 @@ bot.on('document', async (msg) => {
     if (!isValid) {
       bot.sendMessage(
         chatId,
-        '❌ Пожалуйста, отправьте фото или PDF документ.'
+        '❌ Фото немесе PDF құжат жіберіңіз.'
       );
       return;
     }
 
     await handleReceipt(userId, chatId, fileId, 'document', fileName);
   } else {
-    bot.sendMessage(chatId, 'Отправьте /start для начала работы.');
+    bot.sendMessage(chatId, 'Бастау үшін /start деп жазыңыз.');
   }
 });
 
@@ -711,10 +708,10 @@ async function handleReceipt(userId, chatId, fileId, fileType, fileName = null) 
 
     await bot.sendMessage(
       chatId,
-      `✅ *Чек получен!*\n\n` +
-      `Ваш платёж отправлен на проверку.\n` +
-      `Обычно это занимает до 30 минут.\n\n` +
-      `Мы уведомим вас, когда доступ будет активирован! 🎉`,
+      `✅ *Чек қабылданды!*\n\n` +
+      `Төлеміңіз тексеруге жіберілді.\n` +
+      `Әдетте бұл 30 минутқа дейін созылады.\n\n` +
+      `Қолжетімділік ашылған кезде хабарлаймыз! 🎉`,
       { 
         parse_mode: 'Markdown',
         reply_markup: { remove_keyboard: true }
@@ -728,7 +725,7 @@ async function handleReceipt(userId, chatId, fileId, fileType, fileName = null) 
 
   } catch (error) {
     console.error('❌ Ошибка сохранения чека:', error);
-    bot.sendMessage(chatId, '❌ Ошибка. Попробуйте ещё раз.');
+    bot.sendMessage(chatId, '❌ Қате пайда болды. Қайтадан жіберіңіз.');
   }
 }
 
@@ -802,7 +799,7 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
   const param = match && match[1] ? match[1] : null;
 
   if (!userId) {
-    bot.sendMessage(chatId, '❌ Не удалось определить ваш ID');
+    bot.sendMessage(chatId, '❌ ID анықтау мүмкін болмады');
     return;
   }
 
@@ -819,9 +816,9 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       // Пользователь уже прошёл онбординг и оплатил
       bot.sendMessage(
         chatId,
-        `Ассаляму алейкум, ${from.first_name}! 🤲\n\n` +
-        `Добро пожаловать обратно!\n\n` +
-        `Откройте трекер:`,
+        `Ассаляму Алейкум, ${from.first_name}! 🤲\n\n` +
+        `Imantap-қа қайта қош келдіңіз!\n\n` +
+        `Трекерді ашу үшін төмендегі батырманы басыңыз:`,
         {
           reply_markup: {
             keyboard: [
@@ -846,7 +843,7 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       if (referralCode.toUpperCase() === user.promoCode) {
         bot.sendMessage(
           chatId,
-          "⚠️ Вы не можете использовать свой промокод!"
+          "⚠️ Өз промокодыңызды пайдалануға болмайды!"
         );
         return;
       }
@@ -860,10 +857,10 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
         
         bot.sendMessage(
           chatId,
-          `🎁 *У вас есть реферальная ссылка!*\n\n` +
-          `Ваш друг пригласил вас.\n` +
-          `Вы получите скидку -500₸!\n\n` +
-          `Давайте начнём настройку! 🚀`,
+          `🎁 *Сізде реферал сілтемесі бар!*\n\n` +
+          `Досыңыз сізді шақырды.\n` +
+          `Сіз -500₸ жеңілдік аласыз!\n\n` +
+          `Баптауды бастайық! 🚀`,
           { parse_mode: 'Markdown' }
         );
       }
@@ -884,7 +881,7 @@ bot.onText(/\/mycode/, async (msg) => {
   const userId = msg.from?.id;
 
   if (!userId) {
-    bot.sendMessage(chatId, '❌ Не удалось определить ваш ID');
+    bot.sendMessage(chatId, '❌ ID анықтау мүмкін болмады');
     return;
   }
 
@@ -892,26 +889,20 @@ bot.onText(/\/mycode/, async (msg) => {
     const user = await getUserById(userId);
 
     if (!user) {
-      bot.sendMessage(chatId, '❌ Пользователь не найден. Используйте /start');
+      bot.sendMessage(chatId, '❌ Пайдаланушы табылмады. /start деп жазыңыз.');
       return;
     }
 
     const botUsername = 'imantap_bot';
-    const referralLink = 'https://t.me/' + botUsername + '?start=ref_' + user.promoCode;
+    const referralLink = `https://t.me/${botUsername}?start=ref_${user.promoCode}`;
     
-    console.log('=== MYCODE DEBUG ===');
-    console.log('Bot username:', botUsername);
-    console.log('Promo code:', user.promoCode);
-    console.log('Generated link:', referralLink);
-    console.log('===================');
+    const message = 
+      `🎁 Сіздің реферал кодыңыз:\n\n` +
+      `📋 Код: ${user.promoCode}\n` +
+      `👥 Шақырылғандар: ${user.invitedCount}\n\n` +
+      `🔗 Реферал сілтеме:\n${referralLink}\n\n` +
+      `Досыңызбен бөлісіңіз!`;
 
-    const message = '🎁 Сіздің реферал коды:\n\n' +
-      '📋 Код: ' + user.promoCode + '\n' +
-      '👥 Шақырылғандар: ' + user.invitedCount + '\n\n' +
-      '🔗 Реферал сілтеме:\n' + referralLink + '\n\n' +
-      'Досыңызбен бөлісіңіз!';
-
-    // БЕЗ parse_mode - подчёркивания будут видны!
     bot.sendMessage(chatId, message);
 
   } catch (error) {
@@ -926,7 +917,7 @@ bot.onText(/\/stats/, async (msg) => {
   const userId = msg.from?.id;
 
   if (!userId) {
-    bot.sendMessage(chatId, '❌ Не удалось определить ваш ID');
+    bot.sendMessage(chatId, '❌ ID анықтау мүмкін болмады');
     return;
   }
 
@@ -934,17 +925,17 @@ bot.onText(/\/stats/, async (msg) => {
     const user = await getUserById(userId);
 
     if (!user) {
-      bot.sendMessage(chatId, '❌ Пользователь не найден. Используйте /start');
+      bot.sendMessage(chatId, '❌ Пайдаланушы табылмады. /start деп жазыңыз.');
       return;
     }
 
     bot.sendMessage(
       chatId,
-      `📊 Ваша статистика:\n\n` +
+      `📊 Сіздің статистикаңыз:\n\n` +
       `👤 ID: ${user.userId}\n` +
       `📋 Промокод: ${user.promoCode}\n` +
-      `👥 Приглашено: ${user.invitedCount}\n` +
-      `📅 Регистрация: ${user.createdAt.toLocaleDateString('ru-RU')}`
+      `👥 Шақырылғандар: ${user.invitedCount}\n` +
+      `📅 Тіркелген күні: ${user.createdAt.toLocaleDateString('kk-KZ')}`
     );
 
   } catch (error) {
@@ -1158,7 +1149,6 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
 
-  
   if (req.method === 'OPTIONS') {
     res.statusCode = 200;
     res.end();
