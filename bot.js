@@ -811,9 +811,8 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       user = await getOrCreateUser(userId, from.username);
     }
 
-    // Проверяем завершён ли онбординг
+    // 🔥 ПРОВЕРКА 1: Если пользователь УЖЕ завершил онбординг И оплатил
     if (user.onboardingCompleted && user.paymentStatus === 'paid') {
-      // Пользователь уже прошёл онбординг и оплатил
       bot.sendMessage(
         chatId,
         `Ассаляму Алейкум, ${from.first_name}! 🤲\n\n` +
@@ -834,7 +833,7 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       return;
     }
 
-    // Обрабатываем реферальный код
+    // 🔥 ПРОВЕРКА 2: Если есть реферальная ссылка
     let referralCode = null;
     if (param && param.startsWith('ref_')) {
       referralCode = param.substring(4);
@@ -852,8 +851,10 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       const inviter = await getUserByPromoCode(referralCode);
       
       if (inviter) {
-        // Сохраняем реферал в сессию
-        setSessionData(userId, 'referralCode', referralCode);
+        // Сохраняем реферал
+        await updateUserOnboarding(userId, {
+          referredBy: referralCode
+        });
         
         bot.sendMessage(
           chatId,
@@ -866,8 +867,33 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       }
     }
 
-    // Начинаем онбординг
-    await startOnboarding(chatId, userId, from.first_name);
+    // 🔥 ПРОВЕРКА 3: Определяем с какого шага начать онбординг
+    
+    // Если НЕТ телефона - начинаем с телефона
+    if (!user.phoneNumber) {
+      await startOnboarding(chatId, userId, from.first_name);
+      return;
+    }
+    
+    // Если НЕТ города - запрашиваем город
+    if (!user.location || !user.location.city) {
+      await requestLocation(chatId, userId);
+      return;
+    }
+    
+    // Если НЕТ промокода И НЕТ реферала - спрашиваем промокод
+    if (!user.usedPromoCode && !user.referredBy) {
+      await requestPromoCode(chatId, userId);
+      return;
+    }
+    
+    // Если всё есть, но НЕ оплачено - показываем оплату
+    if (user.paymentStatus !== 'paid') {
+      const price = (user.hasDiscount || user.referredBy) ? 1990 : 2490;
+      const hasDiscount = !!(user.hasDiscount || user.referredBy);
+      await showPayment(chatId, userId, price, hasDiscount);
+      return;
+    }
 
   } catch (error) {
     console.error('❌ Ошибка в /start:', error);
