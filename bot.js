@@ -135,7 +135,6 @@ bot.onText(/\/mycode/, async (msg) => {
       return;
     }
 
-    // ИСПОЛЬЗУЕМ ЯВНУЮ КОНКАТЕНАЦИЮ СТРОК
     const botUsername = 'imantap_bot';
     const referralLink = 'https://t.me/' + botUsername + '?start=ref_' + user.promoCode;
     
@@ -146,19 +145,19 @@ bot.onText(/\/mycode/, async (msg) => {
     console.log('===================');
 
     const message = '🎁 Сіздің реферал коды:\n\n' +
-      '📋 Код: `' + user.promoCode + '`\n' +
+      '📋 Код: ' + user.promoCode + '\n' +
       '👥 Шақырылғандар: ' + user.invitedCount + '\n\n' +
       '🔗 Реферал сілтеме:\n' + referralLink + '\n\n' +
       'Досыңызбен бөлісіңіз!';
 
-    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+    // БЕЗ parse_mode - подчёркивания будут видны!
+    bot.sendMessage(chatId, message);
 
   } catch (error) {
     console.error('❌ Ошибка в /mycode:', error);
     bot.sendMessage(chatId, '❌ Қате орын алды. Қайталап көріңіз.');
   }
 });
-
 
 // Команда /stats - статистика
 bot.onText(/\/stats/, async (msg) => {
