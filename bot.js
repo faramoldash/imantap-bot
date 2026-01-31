@@ -119,12 +119,8 @@ bot.onText(/\/mycode/, async (msg) => {
       return;
     }
 
-    // ЯВНО УКАЖЕМ USERNAME
-    const BOT_USERNAME = 'imantap_bot'; // Ваш реальный username
-    const referralLink = `https://t.me/${BOT_USERNAME}?start=ref_${user.promoCode}`;
-    
-    // Логируем для проверки
-    console.log('🔗 Сгенерированная ссылка:', referralLink);
+    // Явно указываем правильный username
+    const referralLink = `https://t.me/imantap_bot?start=ref_${user.promoCode}`;
 
     bot.sendMessage(
       chatId,
