@@ -17,8 +17,16 @@ import {
   updatePaymentStatus,
   approvePayment,
   rejectPayment,
-  getUserAccess
+  getUserAccess,
+  getPendingPayments
 } from './userService.js';
+import {
+  isAdmin,
+  addManager,
+  removeManager,
+  listManagers,
+  getAdmins
+} from './adminService.js';
 import {
   getSession,
   setState,
@@ -38,8 +46,8 @@ if (!process.env.BOT_TOKEN) {
 }
 
 const token = process.env.BOT_TOKEN;
-const MINI_APP_URL = "https://imantap-production-6776.up.railway.app";
-const PORT = process.env.PORT || 3000;
+const MINI_APP_URL = process.env.MINI_APP_URL || "https://imantap-production-6776.up.railway.app";
+const PORT = process.env.PORT || 8080;
 
 // Создаём бота с polling и явным удалением webhook
 const bot = new TelegramBot(token, { 
@@ -176,17 +184,20 @@ Object.entries(RAMADAN_TIMES).forEach(([reminderType, reminderData]) => {
 console.log('✅ Расписание Рамазан уведомлений настроено!\n');
 
 // =====================================================
-// 🎯 ОБРАБОТКА CALLBACK КНОПОК
+// 🎯 ОБРАБОТКА ВСЕХ CALLBACK КНОПОК
 // =====================================================
 
 bot.on('callback_query', async (query) => {
-  const chatId = query.message.chat.id;
-  const messageId = query.message.message_id;
+  const userId = query.from.id;
   const data = query.data;
+  const messageId = query.message.message_id;
+  const chatId = query.message.chat.id;
   
-  console.log(`📲 Callback: ${data} от ${query.from.id}`);
-  
-  // Обработка кнопки "Жасалды"
+  console.log(`📲 Callback: ${data} от ${userId}`);
+
+  // ==========================================
+  // Обработка кнопок Рамазан уведомлений
+  // ==========================================
   if (data.startsWith('ramadan_')) {
     const [_, type, action] = data.split('_');
     
@@ -206,11 +217,157 @@ bot.on('callback_query', async (query) => {
           }
         );
         
-        console.log(`✅ Пользователь ${query.from.id} подтвердил: ${type}`);
+        console.log(`✅ Пользователь ${userId} подтвердил: ${type}`);
       } catch (error) {
         console.error('❌ Ошибка обработки callback:', error);
       }
     }
+    return; // Важно! Выходим после обработки
+  }
+
+  // ==========================================
+  // Обработка кнопки "У меня есть чек"
+  // ==========================================
+  if (data === 'have_receipt') {
+    await bot.answerCallbackQuery(query.id);
+    
+    await bot.sendMessage(
+      chatId,
+      `📸 *Отправьте чек об оплате*\n\n` +
+      `Это может быть:\n` +
+      `• Скриншот из Kaspi\n` +
+      `• Фото квитанции\n` +
+      `• PDF документ\n` +
+      `• Подтверждение перевода\n\n` +
+      `Просто отправьте файл сюда 👇`,
+      { parse_mode: 'Markdown' }
+    );
+
+    setState(userId, 'WAITING_RECEIPT');
+    return;
+  }
+
+  // ==========================================
+  // Проверка прав для админских действий
+  // ==========================================
+  const hasAccess = await isAdmin(userId);
+  if (!hasAccess && (data.startsWith('approve_') || data.startsWith('reject_'))) {
+    await bot.answerCallbackQuery(query.id, { text: '❌ Доступ запрещён' });
+    return;
+  }
+
+  // ==========================================
+  // Подтверждение оплаты
+  // ==========================================
+  if (data.startsWith('approve_')) {
+    const targetUserId = parseInt(data.replace('approve_', ''));
+
+    try {
+      await approvePayment(targetUserId);
+
+      // Обновляем сообщение
+      const originalCaption = query.message.caption || '';
+      await bot.editMessageCaption(
+        `✅ *ОПЛАТА ПОДТВЕРЖДЕНА*\n\n` +
+        originalCaption.split('Подтвердить оплату?')[0] +
+        `\n✅ Подтвердил: @${query.from.username || userId}\n` +
+        `⏰ ${new Date().toLocaleString('ru-RU')}`,
+        {
+          chat_id: chatId,
+          message_id: messageId,
+          parse_mode: 'Markdown'
+        }
+      );
+
+      await bot.answerCallbackQuery(query.id, { text: '✅ Оплата подтверждена!' });
+
+      // Уведомляем пользователя
+      await bot.sendMessage(
+        targetUserId,
+        `🎉 *Оплата подтверждена!*\n\n` +
+        `Добро пожаловать в Imantap Premium! 🌙\n\n` +
+        `Откройте ваш персональный трекер:`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            keyboard: [
+              [{
+                text: "🌙 Рамазан трекерін ашу",
+                web_app: { url: MINI_APP_URL }
+              }]
+            ],
+            resize_keyboard: true
+          }
+        }
+      );
+
+      // Обрабатываем реферала
+      const user = await getUserById(targetUserId);
+      if (user.referredBy) {
+        const inviter = await getUserByPromoCode(user.referredBy);
+        if (inviter) {
+          await incrementReferralCount(inviter.userId);
+          
+          await bot.sendMessage(
+            inviter.userId,
+            `🎁 *Новый реферал!*\n\n` +
+            `Ваш друг оплатил доступ.\n` +
+            `Всего рефералов: ${inviter.invitedCount + 1} 🔥`,
+            { parse_mode: 'Markdown' }
+          );
+        }
+      }
+
+    } catch (error) {
+      console.error('❌ Ошибка подтверждения:', error);
+      await bot.answerCallbackQuery(query.id, { text: '❌ Ошибка!' });
+    }
+    return;
+  }
+
+  // ==========================================
+  // Отклонение оплаты
+  // ==========================================
+  if (data.startsWith('reject_')) {
+    const targetUserId = parseInt(data.replace('reject_', ''));
+
+    try {
+      await rejectPayment(targetUserId);
+
+      // Обновляем сообщение
+      const originalCaption = query.message.caption || '';
+      await bot.editMessageCaption(
+        `❌ *ОПЛАТА ОТКЛОНЕНА*\n\n` +
+        originalCaption.split('Подтвердить оплату?')[0] +
+        `\n❌ Отклонил: @${query.from.username || userId}\n` +
+        `⏰ ${new Date().toLocaleString('ru-RU')}`,
+        {
+          chat_id: chatId,
+          message_id: messageId,
+          parse_mode: 'Markdown'
+        }
+      );
+
+      await bot.answerCallbackQuery(query.id, { text: '❌ Оплата отклонена' });
+
+      // Уведомляем пользователя
+      await bot.sendMessage(
+        targetUserId,
+        `❌ *Оплата не подтверждена*\n\n` +
+        `К сожалению, мы не смогли подтвердить ваш платёж.\n\n` +
+        `Возможные причины:\n` +
+        `• Неверная сумма\n` +
+        `• Некорректный чек\n` +
+        `• Платёж не найден\n\n` +
+        `Пожалуйста, попробуйте снова или свяжитесь с поддержкой.`,
+        { parse_mode: 'Markdown' }
+      );
+
+    } catch (error) {
+      console.error('❌ Ошибка отклонения:', error);
+      await bot.answerCallbackQuery(query.id, { text: '❌ Ошибка!' });
+    }
+    return;
   }
 });
 
@@ -489,6 +646,153 @@ bot.on('message', async (msg) => {
   }
 });
 
+// =====================================================
+// 📸 ОБРАБОТКА ЧЕКОВ (ФОТО И ДОКУМЕНТЫ)
+// =====================================================
+
+// Обработка фото
+bot.on('photo', async (msg) => {
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+  const state = getState(userId);
+
+  if (state === 'WAITING_RECEIPT') {
+    const photo = msg.photo[msg.photo.length - 1]; // Лучшее качество
+    const fileId = photo.file_id;
+
+    await handleReceipt(userId, chatId, fileId, 'photo');
+  } else {
+    bot.sendMessage(chatId, 'Отправьте /start для начала работы.');
+  }
+});
+
+// Обработка документов (PDF, скриншоты)
+bot.on('document', async (msg) => {
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+  const state = getState(userId);
+
+  if (state === 'WAITING_RECEIPT') {
+    const document = msg.document;
+    const fileId = document.file_id;
+    const fileName = document.file_name;
+
+    // Проверяем что это изображение или PDF
+    const validTypes = ['image/', 'application/pdf'];
+    const isValid = validTypes.some(type => 
+      document.mime_type?.startsWith(type)
+    );
+
+    if (!isValid) {
+      bot.sendMessage(
+        chatId,
+        '❌ Пожалуйста, отправьте фото или PDF документ.'
+      );
+      return;
+    }
+
+    await handleReceipt(userId, chatId, fileId, 'document', fileName);
+  } else {
+    bot.sendMessage(chatId, 'Отправьте /start для начала работы.');
+  }
+});
+
+// Универсальная функция обработки чека
+async function handleReceipt(userId, chatId, fileId, fileType, fileName = null) {
+  try {
+    // Сохраняем данные о чеке
+    await updateUserOnboarding(userId, {
+      receiptFileId: fileId,
+      receiptFileType: fileType,
+      receiptFileName: fileName,
+      receiptSubmittedAt: new Date(),
+      paymentStatus: 'pending'
+    });
+
+    await bot.sendMessage(
+      chatId,
+      `✅ *Чек получен!*\n\n` +
+      `Ваш платёж отправлен на проверку.\n` +
+      `Обычно это занимает до 30 минут.\n\n` +
+      `Мы уведомим вас, когда доступ будет активирован! 🎉`,
+      { 
+        parse_mode: 'Markdown',
+        reply_markup: { remove_keyboard: true }
+      }
+    );
+
+    // Уведомляем всех админов/менеджеров
+    await notifyAdminsNewPayment(userId, fileId, fileType);
+
+    clearSession(userId);
+
+  } catch (error) {
+    console.error('❌ Ошибка сохранения чека:', error);
+    bot.sendMessage(chatId, '❌ Ошибка. Попробуйте ещё раз.');
+  }
+}
+
+// =====================================================
+// 👨‍💼 УВЕДОМЛЕНИЕ ВСЕХ АДМИНОВ
+// =====================================================
+
+async function notifyAdminsNewPayment(userId, fileId, fileType) {
+  try {
+    const user = await getUserById(userId);
+    const adminIds = await getAdmins();
+    
+    const discountText = user.hasDiscount 
+      ? `💰 Сумма: ~~2490₸~~ → *${user.paidAmount}₸* (скидка!)` 
+      : `💰 Сумма: *${user.paidAmount}₸*`;
+
+    const caption =
+      `🔔 *Новый платёж на проверке*\n\n` +
+      `👤 User ID: \`${userId}\`\n` +
+      `👤 Имя: ${user.username || 'н/д'}\n` +
+      `📱 Телефон: ${user.phoneNumber || 'н/д'}\n` +
+      `📍 Город: ${user.location?.city || 'не указан'}\n` +
+      `${discountText}\n` +
+      `🎟️ Промокод: ${user.usedPromoCode || user.referredBy || 'нет'}\n` +
+      `⏰ Отправлено: ${new Date().toLocaleString('ru-RU')}\n\n` +
+      `Подтвердить оплату?`;
+
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: '✅ Подтвердить', callback_data: `approve_${userId}` },
+          { text: '❌ Отклонить', callback_data: `reject_${userId}` }
+        ]
+      ]
+    };
+
+    // Отправляем всем админам/менеджерам
+    for (const adminId of adminIds) {
+      try {
+        if (fileType === 'photo') {
+          await bot.sendPhoto(adminId, fileId, {
+            caption,
+            parse_mode: 'Markdown',
+            reply_markup: keyboard
+          });
+        } else {
+          // Для документов отправляем файл
+          await bot.sendDocument(adminId, fileId, {
+            caption,
+            parse_mode: 'Markdown',
+            reply_markup: keyboard
+          });
+        }
+        
+        console.log(`📤 Уведомление отправлено админу ${adminId}`);
+      } catch (error) {
+        console.error(`❌ Не удалось отправить админу ${adminId}:`, error.message);
+      }
+    }
+  } catch (error) {
+    console.error('❌ Ошибка уведомления админов:', error);
+  }
+}
+
 // ===== КОМАНДЫ БОТА =====
 
 bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
@@ -646,6 +950,189 @@ bot.onText(/\/stats/, async (msg) => {
   } catch (error) {
     console.error('❌ Ошибка в /stats:', error);
     bot.sendMessage(chatId, '❌ Қате орын алды. Қайталап көріңіз.');
+  }
+});
+
+// ===== КОМАНДЫ УПРАВЛЕНИЯ МЕНЕДЖЕРАМИ (только главный админ) =====
+
+// /addmanager - добавить менеджера
+bot.onText(/\/addmanager(?:\s+(\d+))?/, async (msg, match) => {
+  const adminId = msg.from.id;
+  const chatId = msg.chat.id;
+  const MAIN_ADMIN = parseInt(process.env.MAIN_ADMIN_ID);
+
+  if (adminId !== MAIN_ADMIN) {
+    bot.sendMessage(chatId, '❌ Только главный админ может добавлять менеджеров');
+    return;
+  }
+
+  const managerId = match && match[1] ? parseInt(match[1]) : null;
+
+  if (!managerId) {
+    bot.sendMessage(
+      chatId,
+      `📝 *Как добавить менеджера:*\n\n` +
+      `1. Попросите менеджера написать боту @userinfobot\n` +
+      `2. Скопируйте его Telegram ID\n` +
+      `3. Отправьте команду:\n` +
+      `\`/addmanager ID\`\n\n` +
+      `Пример: \`/addmanager 123456789\``,
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  try {
+    const result = await addManager(managerId, adminId);
+    
+    if (result.success) {
+      bot.sendMessage(
+        chatId,
+        `✅ *Менеджер добавлен!*\n\n` +
+        `ID: \`${managerId}\`\n\n` +
+        `Теперь он будет получать уведомления о новых платежах.`,
+        { parse_mode: 'Markdown' }
+      );
+      
+      // Уведомляем нового менеджера
+      try {
+        await bot.sendMessage(
+          managerId,
+          `🎉 *Вы добавлены как менеджер Imantap!*\n\n` +
+          `Теперь вы можете:\n` +
+          `✅ Подтверждать оплаты\n` +
+          `❌ Отклонять платежи\n` +
+          `📋 Просматривать статистику\n\n` +
+          `Команды:\n` +
+          `/pending - список ожидающих`,
+          { parse_mode: 'Markdown' }
+        );
+      } catch (e) {
+        // Менеджер ещё не запустил бота
+      }
+    } else {
+      bot.sendMessage(chatId, `❌ ${result.message}`);
+    }
+  } catch (error) {
+    console.error('❌ Ошибка добавления менеджера:', error);
+    bot.sendMessage(chatId, '❌ Ошибка добавления');
+  }
+});
+
+// /removemanager - удалить менеджера
+bot.onText(/\/removemanager(?:\s+(\d+))?/, async (msg, match) => {
+  const adminId = msg.from.id;
+  const chatId = msg.chat.id;
+  const MAIN_ADMIN = parseInt(process.env.MAIN_ADMIN_ID);
+
+  if (adminId !== MAIN_ADMIN) {
+    bot.sendMessage(chatId, '❌ Только главный админ может удалять менеджеров');
+    return;
+  }
+
+  const managerId = match && match[1] ? parseInt(match[1]) : null;
+
+  if (!managerId) {
+    bot.sendMessage(
+      chatId,
+      `Используйте: \`/removemanager ID\`\n\nПример: \`/removemanager 123456789\``,
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  try {
+    const result = await removeManager(managerId);
+    
+    if (result.success) {
+      bot.sendMessage(chatId, `✅ Менеджер удалён: \`${managerId}\``, { parse_mode: 'Markdown' });
+      
+      // Уведомляем удалённого менеджера
+      try {
+        await bot.sendMessage(
+          managerId,
+          `⚠️ Вы удалены из списка менеджеров Imantap.`
+        );
+      } catch (e) {
+        // Игнорируем
+      }
+    } else {
+      bot.sendMessage(chatId, `❌ ${result.message}`);
+    }
+  } catch (error) {
+    console.error('❌ Ошибка удаления менеджера:', error);
+    bot.sendMessage(chatId, '❌ Ошибка удаления');
+  }
+});
+
+// /managers - список всех менеджеров
+bot.onText(/\/managers/, async (msg) => {
+  const adminId = msg.from.id;
+  const chatId = msg.chat.id;
+  const MAIN_ADMIN = parseInt(process.env.MAIN_ADMIN_ID);
+
+  if (adminId !== MAIN_ADMIN) {
+    bot.sendMessage(chatId, '❌ Доступ запрещён');
+    return;
+  }
+
+  try {
+    const managers = await listManagers();
+    
+    if (managers.length === 0) {
+      bot.sendMessage(chatId, '📋 Менеджеры не добавлены');
+      return;
+    }
+
+    let message = `👥 *Список менеджеров: ${managers.length}*\n\n`;
+    
+    managers.forEach((m, index) => {
+      message += `${index + 1}. ID: \`${m.telegramId}\`\n`;
+      if (m.username) message += `   @${m.username}\n`;
+      message += `   Добавлен: ${new Date(m.addedAt).toLocaleDateString('ru-RU')}\n\n`;
+    });
+
+    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('❌ Ошибка загрузки менеджеров:', error);
+    bot.sendMessage(chatId, '❌ Ошибка загрузки');
+  }
+});
+
+// /pending - обновляем для всех админов/менеджеров
+bot.onText(/\/pending/, async (msg) => {
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+
+  const hasAccess = await isAdmin(userId);
+  if (!hasAccess) {
+    bot.sendMessage(chatId, '❌ Доступ запрещён');
+    return;
+  }
+
+  try {
+    const pending = await getPendingPayments();
+
+    if (pending.length === 0) {
+      bot.sendMessage(chatId, '✅ Нет ожидающих платежей');
+      return;
+    }
+
+    let message = `📋 *Ожидают проверки: ${pending.length}*\n\n`;
+
+    pending.forEach((user, index) => {
+      message += 
+        `${index + 1}. User \`${user.userId}\`\n` +
+        `   💰 ${user.paidAmount}₸\n` +
+        `   📍 ${user.location?.city || 'н/д'}\n` +
+        `   ⏰ ${new Date(user.receiptSubmittedAt).toLocaleString('ru-RU')}\n\n`;
+    });
+
+    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+
+  } catch (error) {
+    console.error('❌ Ошибка /pending:', error);
+    bot.sendMessage(chatId, '❌ Ошибка загрузки данных');
   }
 });
 
