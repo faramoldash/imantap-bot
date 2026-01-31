@@ -12,12 +12,18 @@
     "start": "node bot.js",
     "dev": "node --watch bot.js"
   },
-  "keywords": ["telegram", "bot", "ramadan", "mongodb"],
+  "keywords": [
+    "telegram",
+    "bot",
+    "ramadan",
+    "mongodb"
+  ],
   "author": "faramoldash",
   "license": "ISC",
   "dependencies": {
-    "node-telegram-bot-api": "^0.67.0",
+    "cors": "^2.8.6",
+    "dotenv": "^16.4.7",
     "mongodb": "5.9.2",
-    "dotenv": "^16.4.7"
+    "node-telegram-bot-api": "^0.67.0"
   }
 }

@@ -11,31 +11,51 @@ function generatePromoCode() {
 /**
  * Создать или получить пользователя
  */
-async function getOrCreateUser(userId, username = null) {
+export async function getOrCreateUser(userId, username = null) {
   try {
     const db = getDB();
-    const usersCollection = db.collection('users');
+    const users = db.collection('users');
 
-    // Проверяем, существует ли пользователь
-    let user = await usersCollection.findOne({ userId: String(userId) });
+    // Проверяем существует ли пользователь
+    let user = await users.findOne({ userId: parseInt(userId) });
 
     if (user) {
-      console.log(`👤 Пользователь найден: ${userId}`);
       return user;
     }
 
-    // Создаём нового пользователя
+    // Создаём нового пользователя с полной структурой
+    const promoCode = generatePromoCode();
     const newUser = {
-      userId: String(userId),
-      username: username || `user${userId}`,
-      promoCode: generatePromoCode(),
+      userId: parseInt(userId),
+      username: username || null,
+      promoCode: promoCode,
       invitedCount: 0,
       createdAt: new Date(),
       updatedAt: new Date(),
+      
+      // Данные прогресса из Mini App
+      name: username || `User${userId}`,
+      photoUrl: null,
+      startDate: new Date().toISOString().split('T')[0],
+      registrationDate: new Date().toISOString().split('T')[0],
+      progress: {}, // Record<number, DayProgress>
+      memorizedNames: [],
+      completedJuzs: [],
+      quranKhatams: 0,
+      completedTasks: [],
+      deletedPredefinedTasks: [],
+      customTasks: [],
+      quranGoal: 30,
+      dailyQuranGoal: 4,
+      dailyCharityGoal: 100,
+      language: 'kk',
+      xp: 0,
+      hasRedeemedReferral: false,
+      unlockedBadges: []
     };
 
-    await usersCollection.insertOne(newUser);
-    console.log(`✅ Новый пользователь создан: ${userId}, промокод: ${newUser.promoCode}`);
+    await users.insertOne(newUser);
+    console.log(`✅ Новый пользователь создан: ${userId}, промокод: ${promoCode}`);
 
     return newUser;
   } catch (error) {
@@ -52,7 +72,7 @@ async function getUserById(userId) {
     const db = getDB();
     const usersCollection = db.collection('users');
     
-    const user = await usersCollection.findOne({ userId: String(userId) });
+    const user = await usersCollection.findOne({ userId: parseInt(userId) });
     return user;
   } catch (error) {
     console.error('❌ Ошибка в getUserById:', error);
@@ -130,11 +150,92 @@ async function updateUsername(userId, username) {
   }
 }
 
+/**
+ * Обновить полный прогресс пользователя
+ */
+async function updateUserProgress(userId, progressData) {
+  try {
+    const db = getDB();
+    const usersCollection = db.collection('users');
+
+    const result = await usersCollection.updateOne(
+      { userId: parseInt(userId) },
+      {
+        $set: {
+          ...progressData,
+          updatedAt: new Date()
+        }
+      }
+    );
+
+    if (result.modifiedCount > 0) {
+      console.log(`✅ Прогресс обновлён для пользователя: ${userId}`);
+      return true;
+    }
+
+    console.log(`⚠️ Пользователь не найден: ${userId}`);
+    return false;
+  } catch (error) {
+    console.error('❌ Ошибка в updateUserProgress:', error);
+    throw error;
+  }
+}
+
+
+/**
+ * Получить полные данные пользователя для Mini App
+ */
+async function getUserFullData(userId) {
+  try {
+    const db = getDB();
+    const usersCollection = db.collection('users');
+
+    const user = await usersCollection.findOne({ userId: parseInt(userId) });
+    
+    if (!user) {
+      return null;
+    }
+
+    // Возвращаем все данные в формате для Mini App
+    return {
+      userId: user.userId,
+      username: user.username,
+      promoCode: user.promoCode,
+      invitedCount: user.invitedCount,
+      name: user.name,
+      photoUrl: user.photoUrl,
+      startDate: user.startDate,
+      registrationDate: user.registrationDate,
+      progress: user.progress || {},
+      memorizedNames: user.memorizedNames || [],
+      completedJuzs: user.completedJuzs || [],
+      quranKhatams: user.quranKhatams || 0,
+      completedTasks: user.completedTasks || [],
+      deletedPredefinedTasks: user.deletedPredefinedTasks || [],
+      customTasks: user.customTasks || [],
+      quranGoal: user.quranGoal || 30,
+      dailyQuranGoal: user.dailyQuranGoal || 4,
+      dailyCharityGoal: user.dailyCharityGoal || 100,
+      language: user.language || 'kk',
+      xp: user.xp || 0,
+      referralCount: user.invitedCount,
+      myPromoCode: user.promoCode,
+      hasRedeemedReferral: user.hasRedeemedReferral || false,
+      unlockedBadges: user.unlockedBadges || []
+    };
+  } catch (error) {
+    console.error('❌ Ошибка в getUserFullData:', error);
+    throw error;
+  }
+}
+
 export {
   getOrCreateUser,
   getUserById,
   getUserByPromoCode,
   incrementReferralCount,
   updateUsername,
-  generatePromoCode
+  generatePromoCode,
+  updateUserProgress,
+  getUserFullData
 };

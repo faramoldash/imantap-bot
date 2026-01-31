@@ -7,8 +7,11 @@ import {
   getOrCreateUser,
   getUserById,
   getUserByPromoCode,
-  incrementReferralCount
+  incrementReferralCount,
+  updateUserProgress,
+  getUserFullData
 } from './userService.js';
+
 
 dotenv.config();
 
@@ -250,6 +253,69 @@ const server = http.createServer(async (req, res) => {
           username: user.username
         }
       }));
+      return;
+    }
+
+    // GET /api/user/:userId/full - получить ВСЕ данные пользователя
+    const userFullMatch = url.pathname.match(/^\/api\/user\/(\d+)\/full$/);
+    if (req.method === 'GET' && userFullMatch) {
+      const userId = parseInt(userFullMatch[1]);
+      
+      const userData = await getUserFullData(userId);
+      
+      if (!userData) {
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.statusCode = 404;
+        res.end(JSON.stringify({
+          success: false,
+          error: 'User not found'
+        }));
+        return;
+      }
+      
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.statusCode = 200;
+      res.end(JSON.stringify({
+        success: true,
+        data: userData
+      }));
+      return;
+    }
+
+    // POST /api/user/:userId/sync - синхронизировать прогресс
+    const syncMatch = url.pathname.match(/^\/api\/user\/(\d+)\/sync$/);
+    if (req.method === 'POST' && syncMatch) {
+      const userId = parseInt(syncMatch[1]);
+      
+      // Читаем тело запроса
+      let body = '';
+      req.on('data', chunk => {
+        body += chunk.toString();
+      });
+      
+      req.on('end', async () => {
+        try {
+          const progressData = JSON.parse(body);
+          
+          const success = await updateUserProgress(userId, progressData);
+          
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.statusCode = 200;
+          res.end(JSON.stringify({
+            success: success,
+            message: success ? 'Progress synced' : 'No changes made'
+          }));
+        } catch (error) {
+          console.error('❌ Ошибка синхронизации:', error);
+          res.statusCode = 500;
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.end(JSON.stringify({ 
+            success: false, 
+            error: 'Sync failed' 
+          }));
+        }
+      });
+      
       return;
     }
 
