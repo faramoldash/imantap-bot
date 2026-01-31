@@ -19,6 +19,14 @@ import {
   rejectPayment,
   getUserAccess
 } from './userService.js';
+import {
+  getSession,
+  setState,
+  getState,
+  setSessionData,
+  getSessionData,
+  clearSession
+} from './sessionManager.js';
 import schedule from 'node-schedule';
 
 
@@ -206,6 +214,281 @@ bot.on('callback_query', async (query) => {
   }
 });
 
+// =====================================================
+// 🎯 ОНБОРДИНГ ФЛОУ
+// =====================================================
+
+async function startOnboarding(chatId, userId, firstName) {
+  await bot.sendMessage(
+    chatId,
+    `🌙 *Ассаляму алейкум, ${firstName}!*\n\n` +
+    `Добро пожаловать в *Imantap* - ваш личный помощник на Рамазан.\n\n` +
+    `Настроим всё за 2 минуты! 🚀`,
+    { parse_mode: 'Markdown' }
+  );
+
+  // Небольшая задержка для читабельности
+  await new Promise(resolve => setTimeout(resolve, 1000));
+
+  // Шаг 1: Запрос телефона
+  await bot.sendMessage(
+    chatId,
+    `📱 *Шаг 1/3: Номер телефона*\n\n` +
+    `Для персональных уведомлений и восстановления доступа.`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        keyboard: [[{
+          text: '📱 Поделиться номером',
+          request_contact: true
+        }]],
+        resize_keyboard: true,
+        one_time_keyboard: true
+      }
+    }
+  );
+
+  setState(userId, 'WAITING_PHONE');
+}
+
+async function requestLocation(chatId, userId) {
+  await bot.sendMessage(
+    chatId,
+    `✅ Отлично!\n\n` +
+    `📍 *Шаг 2/3: Ваш город*\n\n` +
+    `Для точного времени намазов.`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        keyboard: [
+          [{ text: '📍 Поделиться геолокацией', request_location: true }],
+          [{ text: '🌍 Astana' }, { text: '🌍 Almaty' }],
+          [{ text: '🌍 Shymkent' }, { text: '🌍 Другой город' }]
+        ],
+        resize_keyboard: true
+      }
+    }
+  );
+
+  setState(userId, 'WAITING_LOCATION');
+}
+
+async function requestPromoCode(chatId, userId) {
+  const session = getSession(userId);
+  
+  // Проверяем есть ли реферал
+  if (session.data.referralCode) {
+    // Есть реферал - пропускаем промокод, сразу к оплате
+    await showPayment(chatId, userId, 1990, true);
+    return;
+  }
+
+  // Нет реферала - спрашиваем промокод
+  await bot.sendMessage(
+    chatId,
+    `🎟️ *Шаг 3/3: Промокод*\n\n` +
+    `Есть промокод? Получите скидку -500₸!\n\n` +
+    `Введите промокод или нажмите "Пропустить"`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        keyboard: [['⏭️ Пропустить']],
+        resize_keyboard: true,
+        one_time_keyboard: true
+      }
+    }
+  );
+
+  setState(userId, 'WAITING_PROMO');
+}
+
+async function showPayment(chatId, userId, price, hasDiscount) {
+  const kaspiLink = process.env.KASPI_LINK || 'https://kaspi.kz/pay/imantap';
+
+  const discountText = hasDiscount 
+    ? `~~2490₸~~ → *${price}₸* 🎁\n` 
+    : `*${price}₸*\n`;
+
+  await bot.sendMessage(
+    chatId,
+    `💳 *Оплата доступа*\n\n` +
+    `Imantap Premium - ${discountText}\n` +
+    `✓ Персональные времена намазов\n` +
+    `✓ Трекинг 30 дней Рамазана\n` +
+    `✓ 99 имён Аллаха\n` +
+    `✓ Чтение Корана по джузам\n` +
+    `✓ Система наград и XP\n` +
+    `✓ Лидерборд\n\n` +
+    `После оплаты отправьте чек сюда.`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '💳 Оплатить через Kaspi', url: kaspiLink }],
+          [{ text: '📄 У меня есть чек', callback_data: 'have_receipt' }]
+        ],
+        remove_keyboard: true
+      }
+    }
+  );
+
+  // Сохраняем данные оплаты
+  await updateUserOnboarding(userId, {
+    paidAmount: price,
+    hasDiscount: hasDiscount,
+    paymentStatus: 'unpaid'
+  });
+
+  setState(userId, 'WAITING_RECEIPT');
+}
+
+// =====================================================
+// 📞 ОБРАБОТЧИКИ КОНТАКТОВ И ГЕОЛОКАЦИИ
+// =====================================================
+
+bot.on('contact', async (msg) => {
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+  const state = getState(userId);
+
+  if (state === 'WAITING_PHONE') {
+    const phone = msg.contact.phone_number;
+
+    await updateUserOnboarding(userId, { phoneNumber: phone });
+
+    await requestLocation(chatId, userId);
+  }
+});
+
+bot.on('location', async (msg) => {
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+  const state = getState(userId);
+
+  if (state === 'WAITING_LOCATION') {
+    const { latitude, longitude } = msg.location;
+
+    // Простое определение города (можно улучшить с API)
+    let city = 'Astana';
+    
+    await updateUserOnboarding(userId, {
+      location: {
+        city,
+        country: 'Kazakhstan',
+        latitude,
+        longitude
+      }
+    });
+
+    await requestPromoCode(chatId, userId);
+  }
+});
+
+// Обработка текстовых сообщений
+bot.on('message', async (msg) => {
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+  const text = msg.text;
+  const state = getState(userId);
+
+  // Игнорируем команды и спец. сообщения
+  if (!text || text.startsWith('/') || msg.contact || msg.location) {
+    return;
+  }
+
+  // Выбор города вручную
+  if (state === 'WAITING_LOCATION') {
+    let city = text.replace('🌍 ', '').trim();
+
+    if (city === 'Другой город') {
+      await bot.sendMessage(
+        chatId,
+        'Введите название вашего города:',
+        { reply_markup: { remove_keyboard: true } }
+      );
+      setState(userId, 'WAITING_CITY_NAME');
+      return;
+    }
+
+    await updateUserOnboarding(userId, {
+      location: {
+        city,
+        country: 'Kazakhstan',
+        latitude: null,
+        longitude: null
+      }
+    });
+
+    await requestPromoCode(chatId, userId);
+    return;
+  }
+
+  // Ввод названия города
+  if (state === 'WAITING_CITY_NAME') {
+    const city = text.trim();
+
+    await updateUserOnboarding(userId, {
+      location: {
+        city,
+        country: 'Kazakhstan',
+        latitude: null,
+        longitude: null
+      }
+    });
+
+    await requestPromoCode(chatId, userId);
+    return;
+  }
+
+  // Обработка промокода
+  if (state === 'WAITING_PROMO') {
+    if (text === '⏭️ Пропустить') {
+      await showPayment(chatId, userId, 2490, false);
+      return;
+    }
+
+    const promoCode = text.toUpperCase().trim();
+
+    // Проверяем промокод
+    const check = await checkPromoCode(promoCode, userId);
+
+    if (check.valid) {
+      await updateUserOnboarding(userId, {
+        usedPromoCode: promoCode,
+        hasDiscount: true
+      });
+
+      await markPromoCodeAsUsed(promoCode, userId);
+
+      await bot.sendMessage(
+        chatId,
+        `✅ *Промокод принят!*\n\n` +
+        `Ваша цена: ~~2490₸~~ → *1990₸*`,
+        { parse_mode: 'Markdown' }
+      );
+
+      await showPayment(chatId, userId, 1990, true);
+    } else {
+      let errorMsg = '❌ *Промокод недействителен*\n\n';
+
+      if (check.reason === 'not_found') {
+        errorMsg += 'Такой промокод не существует.';
+      } else if (check.reason === 'already_used') {
+        errorMsg += 'Этот промокод уже использован.';
+      } else if (check.reason === 'own_code') {
+        errorMsg += 'Нельзя использовать свой промокод.';
+      } else if (check.reason === 'owner_not_paid') {
+        errorMsg += 'Владелец промокода ещё не оплатил доступ.';
+      }
+
+      errorMsg += '\n\nПопробуйте другой или пропустите.';
+
+      await bot.sendMessage(chatId, errorMsg, { parse_mode: 'Markdown' });
+    }
+    return;
+  }
+});
+
 // ===== КОМАНДЫ БОТА =====
 
 bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
@@ -220,59 +503,70 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
   }
 
   try {
-    // Создаём или получаем пользователя
-    const user = await getOrCreateUser(userId, from.username);
+    // Получаем или создаём пользователя
+    let user = await getUserById(userId);
+    
+    if (!user) {
+      user = await getOrCreateUser(userId, from.username);
+    }
 
-    // Обработка реферального кода
+    // Проверяем завершён ли онбординг
+    if (user.onboardingCompleted && user.paymentStatus === 'paid') {
+      // Пользователь уже прошёл онбординг и оплатил
+      bot.sendMessage(
+        chatId,
+        `Ассаляму алейкум, ${from.first_name}! 🤲\n\n` +
+        `Добро пожаловать обратно!\n\n` +
+        `Откройте трекер:`,
+        {
+          reply_markup: {
+            keyboard: [
+              [{
+                text: "🌙 Рамазан трекерін ашу",
+                web_app: { url: MINI_APP_URL }
+              }]
+            ],
+            resize_keyboard: true
+          }
+        }
+      );
+      return;
+    }
+
+    // Обрабатываем реферальный код
+    let referralCode = null;
     if (param && param.startsWith('ref_')) {
-      const referralCode = param.substring(4);
+      referralCode = param.substring(4);
       
-      // Проверяем, что пользователь не использует свой же промокод
+      // Проверяем что это не свой промокод
       if (referralCode.toUpperCase() === user.promoCode) {
         bot.sendMessage(
           chatId,
-          "⚠️ Сіз өз промокодыңызды пайдалана алмайсыз!\n\nДосыңыздан басқа код сұраңыз."
+          "⚠️ Вы не можете использовать свой промокод!"
         );
         return;
       }
 
-      // Находим пригласившего
+      // Проверяем существует ли такой промокод
       const inviter = await getUserByPromoCode(referralCode);
       
       if (inviter) {
-        await incrementReferralCount(referralCode);
+        // Сохраняем реферал в сессию
+        setSessionData(userId, 'referralCode', referralCode);
         
         bot.sendMessage(
           chatId,
-          `🎉 Сізді досыңыз шақырды!\n\n` +
-          `Промокод: ${referralCode}\n` +
-          `Рамазан трекерге қош келдіңіз!`
-        );
-      } else {
-        bot.sendMessage(
-          chatId,
-          "⚠️ Промокод табылмады.\n\nРамазан трекерге қош келдіңіз!"
+          `🎁 *У вас есть реферальная ссылка!*\n\n` +
+          `Ваш друг пригласил вас.\n` +
+          `Вы получите скидку -500₸!\n\n` +
+          `Давайте начнём настройку! 🚀`,
+          { parse_mode: 'Markdown' }
         );
       }
     }
 
-    // Показываем кнопку Mini App
-    bot.sendMessage(
-      chatId,
-      `Ассаляму алейкум, ${from.first_name}! 🤲\n\n` +
-      `Рамазан трекерді ашу үшін төмендегі батырманы басыңыз:`,
-      {
-        reply_markup: {
-          keyboard: [
-            [{
-              text: "🌙 Рамазан трекерін ашу",
-              web_app: { url: MINI_APP_URL }
-            }]
-          ],
-          resize_keyboard: true
-        }
-      }
-    );
+    // Начинаем онбординг
+    await startOnboarding(chatId, userId, from.first_name);
 
   } catch (error) {
     console.error('❌ Ошибка в /start:', error);
