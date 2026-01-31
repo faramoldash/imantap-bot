@@ -21,8 +21,23 @@ const token = process.env.BOT_TOKEN;
 const MINI_APP_URL = "https://imantap-production-6776.up.railway.app";
 const PORT = process.env.PORT || 3000;
 
-// Инициализация бота
-const bot = new TelegramBot(token, { polling: true });
+// Используем webhook для Railway
+const bot = new TelegramBot(token);
+
+// Устанавливаем webhook
+const WEBHOOK_URL = process.env.RAILWAY_PUBLIC_DOMAIN 
+  ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}/webhook`
+  : null;
+
+if (WEBHOOK_URL) {
+  bot.setWebHook(WEBHOOK_URL);
+  console.log('🔗 Webhook установлен:', WEBHOOK_URL);
+} else {
+  // Fallback на polling для локальной разработки
+  bot.startPolling();
+  console.log('🔄 Используется polling (локальная разработка)');
+}
+
 
 // Подключение к MongoDB
 await connectDB();
@@ -239,6 +254,30 @@ const server = http.createServer(async (req, res) => {
           invitedCount: user ? user.invitedCount : 0
         }
       }));
+      return;
+    }
+
+    // POST /webhook - обработка обновлений от Telegram
+    if (req.method === 'POST' && url.pathname === '/webhook') {
+      let body = '';
+      
+      req.on('data', chunk => {
+        body += chunk.toString();
+      });
+      
+      req.on('end', () => {
+        try {
+          const update = JSON.parse(body);
+          bot.processUpdate(update);
+          
+          res.statusCode = 200;
+          res.end('OK');
+        } catch (error) {
+          console.error('❌ Ошибка webhook:', error);
+          res.statusCode = 500;
+          res.end('Error');
+        }
+      });
       return;
     }
 
