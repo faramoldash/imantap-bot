@@ -119,8 +119,16 @@ bot.onText(/\/mycode/, async (msg) => {
       return;
     }
 
-    // Явно указываем правильный username
-    const referralLink = `https://t.me/imantap_bot?start=ref_${user.promoCode}`;
+    // ТЕСТОВОЕ ЛОГИРОВАНИЕ
+    const botUsername = 'imantap_bot';
+    const referralLink = `https://t.me/${botUsername}?start=ref_${user.promoCode}`;
+    
+    console.log('=== MYCODE DEBUG ===');
+    console.log('User ID:', userId);
+    console.log('User promoCode:', user.promoCode);
+    console.log('Bot username:', botUsername);
+    console.log('Generated link:', referralLink);
+    console.log('===================');
 
     bot.sendMessage(
       chatId,
@@ -137,6 +145,7 @@ bot.onText(/\/mycode/, async (msg) => {
     bot.sendMessage(chatId, '❌ Қате орын алды. Қайталап көріңіз.');
   }
 });
+
 
 // Команда /stats - статистика
 bot.onText(/\/stats/, async (msg) => {
