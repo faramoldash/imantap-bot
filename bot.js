@@ -53,8 +53,8 @@ await connectDB();
 
 const RAMADAN_TIMES = {
   suhur: {
-    hour: 5,
-    minute: 15, // За 10 минут до Фаджр (05:25)
+    hour: 0,
+    minute: 25, // За 10 минут до Фаджр (05:25)
     name_kk: 'Ауыз бекітетін уақыт',
     emoji: '🌙',
     message: `🌙 *Ауыз бекітетін уақыт болды*
