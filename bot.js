@@ -119,26 +119,23 @@ bot.onText(/\/mycode/, async (msg) => {
       return;
     }
 
+    // ИСПОЛЬЗУЕМ ЯВНУЮ КОНКАТЕНАЦИЮ СТРОК
     const botUsername = 'imantap_bot';
-    const referralLink = `https://t.me/${botUsername}?start=ref_${user.promoCode}`;
+    const referralLink = 'https://t.me/' + botUsername + '?start=ref_' + user.promoCode;
     
     console.log('=== MYCODE DEBUG ===');
-    console.log('User ID:', userId);
-    console.log('User promoCode:', user.promoCode);
     console.log('Bot username:', botUsername);
+    console.log('Promo code:', user.promoCode);
     console.log('Generated link:', referralLink);
     console.log('===================');
 
-    bot.sendMessage(
-      chatId,
-      `🎁 Сіздің реферал коды:\n\n` +
-      `📋 Код: \`${user.promoCode}\`\n` +
-      `👥 Шақырылғандар: ${user.invitedCount}\n\n` +
-      `🔗 Реферал сілтеме:\n${referralLink}\n\n` +
-      `Досыңызбен бөлісіңіз!\n\n` +
-      `🤖 Bot ID: RAILWAY-V2`, // УНИКАЛЬНЫЙ МАРКЕР
-      { parse_mode: 'Markdown' }
-    );
+    const message = '🎁 Сіздің реферал коды:\n\n' +
+      '📋 Код: `' + user.promoCode + '`\n' +
+      '👥 Шақырылғандар: ' + user.invitedCount + '\n\n' +
+      '🔗 Реферал сілтеме:\n' + referralLink + '\n\n' +
+      'Досыңызбен бөлісіңіз!';
+
+    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
 
   } catch (error) {
     console.error('❌ Ошибка в /mycode:', error);
