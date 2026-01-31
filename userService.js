@@ -11,7 +11,7 @@ function generatePromoCode() {
 /**
  * Создать или получить пользователя
  */
-export async function getOrCreateUser(userId, username = null) {
+async function getOrCreateUser(userId, username = null) {
   try {
     const db = getDB();
     const users = db.collection('users');
