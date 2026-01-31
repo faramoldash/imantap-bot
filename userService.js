@@ -11,7 +11,7 @@ function generatePromoCode() {
 /**
  * Создать или получить пользователя
  */
-export async function getOrCreateUser(userId, username = null) {
+async function getOrCreateUser(userId, username = null) {
   const db = getDB();
   const users = db.collection('users');
 
@@ -38,19 +38,19 @@ export async function getOrCreateUser(userId, username = null) {
       timezone: null,
       
       // Реферальная система
-      referredBy: null,           // Кто пригласил
-      usedPromoCode: null,         // Какой промокод использовал
+      referredBy: null,
+      usedPromoCode: null,
       
       // Оплата
-      paymentStatus: 'unpaid',     // unpaid | pending | paid | rejected
-      paidAmount: null,            // 2490 или 1990
+      paymentStatus: 'unpaid',
+      paidAmount: null,
       hasDiscount: false,
       receiptPhotoId: null,
       receiptMessageId: null,
       paymentDate: null,
       
       // Доступ
-      accessType: null,            // null | demo | full
+      accessType: null,
       demoExpiresAt: null,
       
       // Прогресс (как было)
@@ -146,31 +146,6 @@ async function incrementReferralCount(promoCode) {
 }
 
 /**
- * Обновить username пользователя
- */
-async function updateUsername(userId, username) {
-  try {
-    const db = getDB();
-    const usersCollection = db.collection('users');
-
-    await usersCollection.updateOne(
-      { userId: String(userId) },
-      { 
-        $set: { 
-          username: username,
-          updatedAt: new Date()
-        }
-      }
-    );
-
-    console.log(`✏️ Username обновлён для ${userId}: ${username}`);
-  } catch (error) {
-    console.error('❌ Ошибка в updateUsername:', error);
-    throw error;
-  }
-}
-
-/**
  * Обновить полный прогресс пользователя
  */
 async function updateUserProgress(userId, progressData) {
@@ -201,7 +176,6 @@ async function updateUserProgress(userId, progressData) {
   }
 }
 
-
 /**
  * Получить полные данные пользователя для Mini App
  */
@@ -216,7 +190,6 @@ async function getUserFullData(userId) {
       return null;
     }
 
-    // Возвращаем все данные в формате для Mini App
     return {
       userId: user.userId,
       username: user.username,
@@ -253,10 +226,7 @@ async function getUserFullData(userId) {
 // 🔐 ФУНКЦИИ ДЛЯ ОНБОРДИНГА И ОПЛАТЫ
 // =====================================================
 
-/**
- * Обновить онбординг данные пользователя
- */
-export async function updateUserOnboarding(userId, data) {
+async function updateUserOnboarding(userId, data) {
   const db = getDB();
   const users = db.collection('users');
   
@@ -273,34 +243,27 @@ export async function updateUserOnboarding(userId, data) {
   return result.modifiedCount > 0;
 }
 
-/**
- * Проверить промокод на валидность
- */
-export async function checkPromoCode(promoCode, userId) {
+async function checkPromoCode(promoCode, userId) {
   const db = getDB();
   const users = db.collection('users');
   const usedPromoCodes = db.collection('used_promocodes');
   
-  // Проверяем существует ли такой промокод
   const owner = await users.findOne({ promoCode: promoCode.toUpperCase() });
   
   if (!owner) {
     return { valid: false, reason: 'not_found' };
   }
   
-  // Проверяем что это не свой промокод
   if (owner.userId === userId) {
     return { valid: false, reason: 'own_code' };
   }
   
-  // Проверяем что промокод не использован
   const alreadyUsed = await usedPromoCodes.findOne({ promoCode: promoCode.toUpperCase() });
   
   if (alreadyUsed) {
     return { valid: false, reason: 'already_used' };
   }
   
-  // Проверяем что владелец промокода оплатил
   if (owner.paymentStatus !== 'paid') {
     return { valid: false, reason: 'owner_not_paid' };
   }
@@ -308,10 +271,7 @@ export async function checkPromoCode(promoCode, userId) {
   return { valid: true, owner };
 }
 
-/**
- * Отметить промокод как использованный
- */
-export async function markPromoCodeAsUsed(promoCode, userId) {
+async function markPromoCodeAsUsed(promoCode, userId) {
   const db = getDB();
   const usedPromoCodes = db.collection('used_promocodes');
   
@@ -324,10 +284,7 @@ export async function markPromoCodeAsUsed(promoCode, userId) {
   console.log(`✅ Промокод ${promoCode} использован пользователем ${userId}`);
 }
 
-/**
- * Обновить статус оплаты
- */
-export async function updatePaymentStatus(userId, status, additionalData = {}) {
+async function updatePaymentStatus(userId, status, additionalData = {}) {
   const db = getDB();
   const users = db.collection('users');
   
@@ -347,10 +304,7 @@ export async function updatePaymentStatus(userId, status, additionalData = {}) {
   return result.modifiedCount > 0;
 }
 
-/**
- * Подтвердить оплату
- */
-export async function approvePayment(userId) {
+async function approvePayment(userId) {
   const db = getDB();
   const users = db.collection('users');
   
@@ -366,7 +320,6 @@ export async function approvePayment(userId) {
   
   await users.updateOne({ userId }, { $set: updateData });
   
-  // Если был реферал - увеличиваем счётчик
   if (user.referredBy) {
     await incrementReferralCount(user.referredBy);
   }
@@ -376,14 +329,11 @@ export async function approvePayment(userId) {
   return true;
 }
 
-/**
- * Отклонить оплату и дать демо-доступ
- */
-export async function rejectPayment(userId) {
+async function rejectPayment(userId) {
   const db = getDB();
   const users = db.collection('users');
   
-  const demoExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // +1 день
+  const demoExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
   
   const updateData = {
     paymentStatus: 'rejected',
@@ -399,20 +349,14 @@ export async function rejectPayment(userId) {
   return true;
 }
 
-/**
- * Получить всех пользователей с pending статусом оплаты
- */
-export async function getPendingPayments() {
+async function getPendingPayments() {
   const db = getDB();
   const users = db.collection('users');
   
   return await users.find({ paymentStatus: 'pending' }).toArray();
 }
 
-/**
- * Проверить истёк ли демо-доступ
- */
-export async function checkDemoExpiration(userId) {
+async function checkDemoExpiration(userId) {
   const db = getDB();
   const users = db.collection('users');
   
@@ -428,10 +372,7 @@ export async function checkDemoExpiration(userId) {
   return isExpired;
 }
 
-/**
- * Получить информацию о доступе пользователя
- */
-export async function getUserAccess(userId) {
+async function getUserAccess(userId) {
   const db = getDB();
   const users = db.collection('users');
   
@@ -441,7 +382,6 @@ export async function getUserAccess(userId) {
     return { hasAccess: false, type: null, reason: 'user_not_found' };
   }
   
-  // Полный доступ
   if (user.paymentStatus === 'paid') {
     return { 
       hasAccess: true, 
@@ -450,7 +390,6 @@ export async function getUserAccess(userId) {
     };
   }
   
-  // Демо доступ
   if (user.accessType === 'demo') {
     const expiresAt = new Date(user.demoExpiresAt);
     
@@ -469,7 +408,6 @@ export async function getUserAccess(userId) {
     }
   }
   
-  // Нет доступа
   return { 
     hasAccess: false, 
     type: null, 
@@ -479,19 +417,16 @@ export async function getUserAccess(userId) {
 }
 
 // =====================================================
-// ЭКСПОРТЫ
+// ЭКСПОРТЫ (ТОЛЬКО ОДИН РАЗ!)
 // =====================================================
 
 export {
-  // Основные функции
   getOrCreateUser,
   getUserById,
   getUserByPromoCode,
   incrementReferralCount,
   updateUserProgress,
   getUserFullData,
-  
-  // Новые функции онбординга и оплаты
   updateUserOnboarding,
   checkPromoCode,
   markPromoCodeAsUsed,
