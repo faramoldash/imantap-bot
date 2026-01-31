@@ -1,16 +1,19 @@
 {
   "name": "imantap_bot",
   "type": "module",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "version": "2.0.0",
+  "description": "ImanTap Telegram Bot with MongoDB",
+  "main": "bot.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node bot.js",
+    "dev": "node --watch bot.js"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": ["telegram", "bot", "ramadan", "mongodb"],
+  "author": "faramoldash",
   "license": "ISC",
   "dependencies": {
-    "node-telegram-bot-api": "^0.67.0"
+    "node-telegram-bot-api": "^0.67.0",
+    "mongodb": "^6.12.0",
+    "dotenv": "^16.4.7"
   }
 }
