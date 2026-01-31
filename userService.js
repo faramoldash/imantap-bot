@@ -372,47 +372,77 @@ async function checkDemoExpiration(userId) {
   return isExpired;
 }
 
+/**
+ * Получить информацию о доступе пользователя (для Mini App)
+ */
 async function getUserAccess(userId) {
+  const MAIN_ADMIN = parseInt(process.env.MAIN_ADMIN_ID);
+  
+  // 🔥 АДМИН ВСЕГДА ИМЕЕТ ДОСТУП
+  if (userId === MAIN_ADMIN) {
+    return {
+      hasAccess: true,
+      paymentStatus: 'paid',
+      reason: 'admin_access'
+    };
+  }
+  
   const db = getDB();
   const users = db.collection('users');
   
   const user = await users.findOne({ userId });
   
+  // Пользователь не найден
   if (!user) {
-    return { hasAccess: false, type: null, reason: 'user_not_found' };
-  }
-  
-  if (user.paymentStatus === 'paid') {
     return { 
-      hasAccess: true, 
-      type: 'full',
-      onboardingCompleted: user.onboardingCompleted 
+      hasAccess: false, 
+      paymentStatus: 'unpaid',
+      reason: 'user_not_found' 
     };
   }
   
-  if (user.accessType === 'demo') {
+  // Оплата подтверждена
+  if (user.paymentStatus === 'paid') {
+    return { 
+      hasAccess: true, 
+      paymentStatus: 'paid'
+    };
+  }
+  
+  // Платёж на проверке
+  if (user.paymentStatus === 'pending') {
+    return { 
+      hasAccess: false, 
+      paymentStatus: 'pending',
+      reason: 'payment_pending'
+    };
+  }
+  
+  // Демо-доступ
+  if (user.accessType === 'demo' && user.demoExpiresAt) {
     const expiresAt = new Date(user.demoExpiresAt);
     
     if (expiresAt > new Date()) {
       return { 
         hasAccess: true, 
-        type: 'demo',
-        expiresAt: expiresAt.toISOString() 
+        paymentStatus: 'demo',
+        demoExpires: expiresAt.toISOString()
       };
     } else {
+      // Демо истекло
       return { 
         hasAccess: false, 
-        type: null, 
+        paymentStatus: 'unpaid',
         reason: 'demo_expired' 
       };
     }
   }
   
+  // Не оплачено
   return { 
     hasAccess: false, 
-    type: null, 
-    reason: 'not_paid',
-    onboardingCompleted: user.onboardingCompleted 
+    paymentStatus: 'unpaid',
+    reason: 'not_paid'
   };
 }
 
