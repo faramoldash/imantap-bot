@@ -119,7 +119,6 @@ bot.onText(/\/mycode/, async (msg) => {
       return;
     }
 
-    // ТЕСТОВОЕ ЛОГИРОВАНИЕ
     const botUsername = 'imantap_bot';
     const referralLink = `https://t.me/${botUsername}?start=ref_${user.promoCode}`;
     
@@ -136,7 +135,8 @@ bot.onText(/\/mycode/, async (msg) => {
       `📋 Код: \`${user.promoCode}\`\n` +
       `👥 Шақырылғандар: ${user.invitedCount}\n\n` +
       `🔗 Реферал сілтеме:\n${referralLink}\n\n` +
-      `Досыңызбен бөлісіңіз!`,
+      `Досыңызбен бөлісіңіз!\n\n` +
+      `🤖 Bot ID: RAILWAY-V2`, // УНИКАЛЬНЫЙ МАРКЕР
       { parse_mode: 'Markdown' }
     );
 
