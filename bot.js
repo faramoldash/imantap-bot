@@ -804,6 +804,56 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
   }
 
   try {
+    const MAIN_ADMIN = parseInt(process.env.MAIN_ADMIN_ID);
+    
+    // 🔥 АВТОМАТИЧЕСКАЯ НАСТРОЙКА ДЛЯ АДМИНА
+    if (userId === MAIN_ADMIN) {
+      let user = await getUserById(userId);
+      
+      if (!user) {
+        user = await getOrCreateUser(userId, from.username);
+      }
+      
+      // Если админ ещё не завершил онбординг - завершаем автоматически
+      if (!user.onboardingCompleted || user.paymentStatus !== 'paid') {
+        await updateUserOnboarding(userId, {
+          phoneNumber: from.phone_number || '+77001234567',
+          location: {
+            city: 'Астана',
+            country: 'Қазақстан',
+            latitude: 51.1694,
+            longitude: 71.4491
+          },
+          onboardingCompleted: true,
+          paymentStatus: 'paid',
+          paidAmount: 0,
+          hasDiscount: false
+        });
+        
+        console.log('✅ Админ автоматически получил доступ');
+      }
+      
+      // Показываем приветствие
+      bot.sendMessage(
+        chatId,
+        `Ассаляму Алейкум, ${from.first_name}! 👑\n\n` +
+        `Вы администратор Imantap.\n\n` +
+        `Трекерді ашу үшін төмендегі батырманы басыңыз:`,
+        {
+          reply_markup: {
+            keyboard: [
+              [{
+                text: "🌙 Рамазан трекерін ашу",
+                web_app: { url: MINI_APP_URL }
+              }]
+            ],
+            resize_keyboard: true
+          }
+        }
+      );
+      return;
+    }
+
     // Получаем или создаём пользователя
     let user = await getUserById(userId);
     
