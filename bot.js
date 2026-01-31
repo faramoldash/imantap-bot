@@ -200,6 +200,7 @@ const server = http.createServer(async (req, res) => {
   // CORS заголовки - разрешаем запросы с фронтенда
   const allowedOrigins = [
     'https://imantap-production-6776.up.railway.app',
+    'https://web.telegram.org',
     'http://localhost:3000',
     'http://localhost:5173'
   ];
@@ -221,12 +222,22 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
-    // GET /user/:userId - получить данные пользователя
-    const userMatch = url.pathname.match(/^\/user\/(\d+)$/);
+    // GET /api/user/:userId - получить данные пользователя
+    const userMatch = url.pathname.match(/^\/api\/user\/(\d+)$/);
     if (req.method === 'GET' && userMatch) {
-      const userId = userMatch[1];
+      const userId = parseInt(userMatch[1]);
       
-      const user = await getOrCreateUser(userId);
+      const user = await getUserById(userId);
+      
+      if (!user) {
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.statusCode = 404;
+        res.end(JSON.stringify({
+          success: false,
+          error: 'User not found'
+        }));
+        return;
+      }
       
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       res.statusCode = 200;
