@@ -4,6 +4,10 @@
   "version": "2.0.0",
   "description": "ImanTap Telegram Bot with MongoDB",
   "main": "bot.js",
+  "engines": {
+    "node": "20.x",
+    "npm": ">=9.0.0"
+  },
   "scripts": {
     "start": "node bot.js",
     "dev": "node --watch bot.js"
