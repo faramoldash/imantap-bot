@@ -7,11 +7,20 @@ import { getDB } from './db.js';
  * Получить список всех админов/менеджеров
  */
 export async function getAdmins() {
+  const MAIN_ADMIN = parseInt(process.env.MAIN_ADMIN_ID);
+  
   const db = getDB();
   const admins = db.collection('admins');
   
   const adminList = await admins.find({}).toArray();
-  return adminList.map(a => a.telegramId);
+  const managerIds = adminList.map(a => a.telegramId);
+  
+  // Всегда включаем главного админа в список
+  if (MAIN_ADMIN && !managerIds.includes(MAIN_ADMIN)) {
+    managerIds.unshift(MAIN_ADMIN); // Добавляем в начало
+  }
+  
+  return managerIds;
 }
 
 /**
