@@ -2,14 +2,22 @@
 import TelegramBot from 'node-telegram-bot-api';
 import http from 'http';
 import dotenv from 'dotenv';
-import { connectDB, getDB } from './db.js';
+import { connectDB, getDB, createIndexes } from './db.js';
 import {
   getOrCreateUser,
   getUserById,
   getUserByPromoCode,
   incrementReferralCount,
   updateUserProgress,
-  getUserFullData
+  getUserFullData,
+  // Новые функции
+  updateUserOnboarding,
+  checkPromoCode,
+  markPromoCodeAsUsed,
+  updatePaymentStatus,
+  approvePayment,
+  rejectPayment,
+  getUserAccess
 } from './userService.js';
 import schedule from 'node-schedule';
 
@@ -47,14 +55,17 @@ bot.deleteWebHook().then(() => {
 // Подключение к MongoDB
 await connectDB();
 
+// Создаём индексы (выполнится один раз)
+await createIndexes();
+
 // =====================================================
 // 🌙 РАМАЗАН УВЕДОМЛЕНИЯ - Сухур и Ифтар
 // =====================================================
 
 const RAMADAN_TIMES = {
   suhur: {
-    hour: 0,
-    minute: 40, // За 10 минут до Фаджр (05:25)
+    hour: 1,
+    minute: 11, // За 10 минут до Фаджр (05:25)
     name_kk: 'Ауыз бекітетін уақыт',
     emoji: '🌙',
     message: `🌙 *Ауыз бекітетін уақыт болды*
@@ -427,6 +438,22 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({
         success: true,
         data: userData
+      }));
+      return;
+    }
+
+    // GET /api/user/:userId/access - проверить доступ
+    const accessMatch = url.pathname.match(/^\/api\/user\/(\d+)\/access$/);
+    if (req.method === 'GET' && accessMatch) {
+      const userId = parseInt(accessMatch[1]);
+      
+      const access = await getUserAccess(userId);
+      
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.statusCode = 200;
+      res.end(JSON.stringify({
+        success: true,
+        data: access
       }));
       return;
     }

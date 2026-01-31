@@ -36,6 +36,31 @@ export function getDB() {
   return db;
 }
 
+/**
+ * Создать индексы для оптимизации
+ */
+export async function createIndexes() {
+  try {
+    const db = getDB();
+    
+    // Индексы для users
+    await db.collection('users').createIndex({ userId: 1 }, { unique: true });
+    await db.collection('users').createIndex({ promoCode: 1 }, { unique: true });
+    await db.collection('users').createIndex({ paymentStatus: 1 });
+    await db.collection('users').createIndex({ accessType: 1 });
+    await db.collection('users').createIndex({ createdAt: 1 });
+    
+    // Индексы для used_promocodes
+    await db.collection('used_promocodes').createIndex({ promoCode: 1 }, { unique: true });
+    await db.collection('used_promocodes').createIndex({ usedBy: 1 });
+    
+    console.log('✅ Индексы созданы успешно');
+  } catch (error) {
+    console.error('❌ Ошибка создания индексов:', error);
+  }
+}
+
+
 export async function closeDB() {
   if (client) {
     await client.close();
