@@ -263,17 +263,19 @@ bot.on('callback_query', async (query) => {
     try {
       await approvePayment(targetUserId);
 
-      // Обновляем сообщение админа
+      // Обновляем сообщение админа (БЕЗ MARKDOWN!)
       const originalCaption = query.message.caption || '';
+      const baseInfo = originalCaption.split('Подтвердить оплату?')[0];
+      
       await bot.editMessageCaption(
-        `✅ *ОПЛАТА ПОДТВЕРЖДЕНА*\n\n` +
-        originalCaption.split('Подтвердить оплату?')[0] +
-        `\n✅ Подтвердил: @${query.from.username || userId}\n` +
-        `⏰ ${new Date().toLocaleString('ru-RU')}`,
+        `✅ ОПЛАТА ПОДТВЕРЖДЕНА\n\n` +
+        baseInfo +
+        `\n✅ Подтвердил: ${query.from.username ? '@' + query.from.username : 'ID: ' + userId}\n` +
+        `⏰ ${new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' })}`,
         {
           chat_id: chatId,
-          message_id: messageId,
-          parse_mode: 'Markdown'
+          message_id: messageId
+          // БЕЗ parse_mode!
         }
       );
 
@@ -286,7 +288,6 @@ bot.on('callback_query', async (query) => {
         `ImanTap Premium-ға қош келдіңіз! 🌙\n\n` +
         `Трекерді ашу үшін төмендегі батырманы басыңыз:`,
         {
-          // БЕЗ parse_mode - просто текст
           reply_markup: {
             keyboard: [
               [{
@@ -299,25 +300,31 @@ bot.on('callback_query', async (query) => {
         }
       );
 
-      // Обрабатываем реферала
+      // Начисляем реферальный бонус (если есть)
       const user = await getUserById(targetUserId);
       if (user.referredBy) {
         const inviter = await getUserByPromoCode(user.referredBy);
         if (inviter) {
           await incrementReferralCount(inviter.userId);
+          console.log(`🎉 Реферал засчитан для промокода: ${user.referredBy}`);
           
           await bot.sendMessage(
             inviter.userId,
-            `🎁 *Жаңа реферал!*\n\n` +
+            `🎁 Жаңа реферал!\n\n` +
             `Сіздің досыңыз төлем жасады.\n` +
-            `Барлық рефералдар: ${inviter.invitedCount + 1} 🔥`,
+            `Барлық рефералдар: ${inviter.invitedCount + 1} 🔥`
           );
         }
       }
 
+      console.log(`✅ Оплата подтверждена для пользователя ${targetUserId}`);
+
     } catch (error) {
       console.error('❌ Ошибка подтверждения:', error);
-      await bot.answerCallbackQuery(query.id, { text: '❌ Ошибка!' });
+      await bot.answerCallbackQuery(query.id, { 
+        text: '❌ Ошибка при подтверждении', 
+        show_alert: true 
+      });
     }
     return;
   }
@@ -331,37 +338,44 @@ bot.on('callback_query', async (query) => {
     try {
       await rejectPayment(targetUserId);
 
-      // Обновляем сообщение админа
+      // Обновляем сообщение админа (БЕЗ MARKDOWN!)
       const originalCaption = query.message.caption || '';
+      const baseInfo = originalCaption.split('Подтвердить оплату?')[0];
+      
       await bot.editMessageCaption(
-        `❌ *ОПЛАТА ОТКЛОНЕНА*\n\n` +
-        originalCaption.split('Подтвердить оплату?')[0] +
-        `\n❌ Отклонил: @${query.from.username || userId}\n` +
-        `⏰ ${new Date().toLocaleString('ru-RU')}`,
+        `❌ ОПЛАТА ОТКЛОНЕНА\n\n` +
+        baseInfo +
+        `\n❌ Отклонил: ${query.from.username ? '@' + query.from.username : 'ID: ' + userId}\n` +
+        `⏰ ${new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' })}`,
         {
           chat_id: chatId,
-          message_id: messageId,
-          parse_mode: 'Markdown'
+          message_id: messageId
+          // БЕЗ parse_mode!
         }
       );
 
       await bot.answerCallbackQuery(query.id, { text: '❌ Оплата отклонена' });
 
-      // Уведомляем пользователя (НА КАЗАХСКОМ!)
+      // Уведомляем пользователя
       await bot.sendMessage(
         targetUserId,
-        `❌ *Төлем расталмады*\n\n` +
+        `❌ Төлем расталмады\n\n` +
         `Өкінішке орай, төлеміңізді растай алмадық.\n\n` +
         `Мүмкін себептері:\n` +
         `• Сома дұрыс емес\n` +
         `• Чек анық емес\n` +
         `• Төлем табылмады\n\n` +
-        `Қайтадан көріңіз немесе қолдау қызметіне жазыңыз.`,
+        `Қайтадан көріңіз немесе қолдау қызметіне жазыңыз.`
       );
+
+      console.log(`❌ Оплата отклонена для пользователя ${targetUserId}`);
 
     } catch (error) {
       console.error('❌ Ошибка отклонения:', error);
-      await bot.answerCallbackQuery(query.id, { text: '❌ Ошибка!' });
+      await bot.answerCallbackQuery(query.id, { 
+        text: '❌ Ошибка при отклонении', 
+        show_alert: true 
+      });
     }
     return;
   }
