@@ -443,29 +443,36 @@ async function requestLocation(chatId, userId) {
 async function requestPromoCode(chatId, userId) {
   const session = getSession(userId);
   
-  // Проверяем есть ли реферал
+  // Если пришёл по реферальной ссылке - сразу скидка
   if (session.data.referralCode) {
-    // Есть реферал - пропускаем промокод, сразу к оплате
     await showPayment(chatId, userId, 1990, true);
     return;
   }
-
-  // Нет реферала - спрашиваем промокод
+  
+  // 🎁 Предлагаем ДЕМО или ОПЛАТУ
   await bot.sendMessage(
     chatId,
-    `🎟️ *3/3-қадам: Промокод*\n\n` +
-    `Промокод бар болса, -500₸ жеңілдік алыңыз!\n\n` +
-    `Промокодты теріңіз немесе «Өткізіп жіберу» батырмасын басыңыз.`,
+    `3️⃣ *3/3-қадам:*\n\n` +
+    `Таңдаңыз:\n\n` +
+    `🎁 *24 сағат тегін қолдану*\n` +
+    `Барлық мүмкіндіктерді тексеріңіз!\n\n` +
+    `💳 *Толық нұсқа - 2 490₸*\n` +
+    `Промокод бар болса - 1 990₸\n\n` +
+    `Немесе промокодты жіберіңіз:`,
     {
       parse_mode: 'Markdown',
       reply_markup: {
-        keyboard: [['⏭️ Өткізіп жіберу']],
+        keyboard: [
+          [{ text: '🎁 24 сағат тегін' }],
+          [{ text: '💳 Төлем жасау' }],
+          [{ text: '🎟️ Менде промокод бар' }]
+        ],
         resize_keyboard: true,
         one_time_keyboard: true
       }
     }
   );
-
+  
   setState(userId, 'WAITING_PROMO');
 }
 
@@ -608,49 +615,169 @@ bot.on('message', async (msg) => {
 
   // Обработка промокода
   if (state === 'WAITING_PROMO') {
-    if (text === '⏭️ Өткізіп жіберу') {
+  
+    // 🎁 ДЕМО-ДОСТУП
+    if (text === '🎁 24 сағат тегін қолдану') {
+      try {
+        const demoExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // +24 часа
+        
+        await updateUserOnboarding(userId, {
+          accessType: 'demo',
+          demoExpiresAt: demoExpiresAt,
+          onboardingCompleted: true,
+          paymentStatus: 'unpaid' // Важно! Статус остаётся unpaid
+        });
+        
+        await bot.sendMessage(
+          chatId,
+          `🎉 *Демо-режим қосылды!*\n\n` +
+          `Сізде *24 сағат* тегін қолжетімділік бар.\n\n` +
+          `Барлық мүмкіндіктерді қолданып көріңіз! 🌙\n\n` +
+          `Демо аяқталғаннан кейін төлем жасауға болады.`,
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              keyboard: [
+                [{
+                  text: "🌙 Рамазан трекерін ашу",
+                  web_app: { url: MINI_APP_URL }
+                }]
+              ],
+              resize_keyboard: true
+            }
+          }
+        );
+        
+        console.log(`🎁 Демо-доступ активирован для пользователя ${userId} до ${demoExpiresAt.toISOString()}`);
+        clearSession(userId);
+        
+      } catch (error) {
+        console.error('❌ Ошибка активации демо:', error);
+        await bot.sendMessage(chatId, '❌ Қате орын алды. Қайталап көріңіз.');
+      }
+      return;
+    }
+    
+    // 💳 ОПЛАТА СРАЗУ
+    if (text === '💳 Төлем жасау' || text === '❌ Жоқ') {
       await showPayment(chatId, userId, 2490, false);
       return;
     }
-
+    
+    // 🎟️ ВВОД ПРОМОКОДА
+    if (text === '🎟️ Менде промокод бар') {
+      await bot.sendMessage(
+        chatId,
+        `🎟️ Промокодты жіберіңіз:`,
+        {
+          reply_markup: {
+            keyboard: [['❌ Артқа қайту']],
+            resize_keyboard: true,
+            one_time_keyboard: true
+          }
+        }
+      );
+      setState(userId, 'ENTERING_PROMO');
+      return;
+    }
+    
+    // ❌ НАЗАД (из ввода промокода)
+    if (text === '❌ Артқа қайту') {
+      await requestPromoCode(chatId, userId);
+      return;
+    }
+    
+    // Если написали что-то другое - считаем что это промокод
     const promoCode = text.toUpperCase().trim();
-
-    // Проверяем промокод
     const check = await checkPromoCode(promoCode, userId);
-
+    
     if (check.valid) {
       await updateUserOnboarding(userId, {
         usedPromoCode: promoCode,
         hasDiscount: true
       });
-
+      
       await markPromoCodeAsUsed(promoCode, userId);
-
+      
       await bot.sendMessage(
         chatId,
-        `✅ *Промокод қабылданды!*\n\n` +
-        `Сіздің бағаңыз: ~~2490₸~~ → *1990₸*`,
+        `✅ Промокод қабылданды!\n\n` +
+        `Сізге -500₸ жеңілдік берілді:\n` +
+        `2490₸ → 1990₸`,
         { parse_mode: 'Markdown' }
       );
-
+      
       await showPayment(chatId, userId, 1990, true);
     } else {
-      let errorMsg = '❌ *Промокод жарамсыз*\n\n';
-
+      // Ошибка промокода
+      let errorMsg = '❌ Промокод қате.';
       if (check.reason === 'not_found') {
-        errorMsg += 'Мұндай промокод табылмады.';
+        errorMsg = '❌ Промокод табылмады.';
       } else if (check.reason === 'already_used') {
-        errorMsg += 'Бұл промокод қолданылған.';
+        errorMsg = '❌ Бұл промокод қолданылған.';
       } else if (check.reason === 'own_code') {
-        errorMsg += 'Өз промокодыңызды пайдалану мүмкін емес.';
+        errorMsg = '❌ Өз промокодыңызды қолдануға болмайды.';
       } else if (check.reason === 'owner_not_paid') {
-        errorMsg += 'Бұл промокод иесі әлі төлем жасаған жоқ.';
+        errorMsg = '❌ Промокод иесі төлем жасамаған.';
       }
-
-      errorMsg += '\n\nБасқа промокодты көріңіз немесе өткізіп жіберіңіз.';
-
+      errorMsg += '\n\nҚайталап көріңіз немесе артқа қайтыңыз.';
+      
       await bot.sendMessage(chatId, errorMsg, { parse_mode: 'Markdown' });
     }
+    
+    return;
+  }
+
+  // 🎟️ СОСТОЯНИЕ ВВОДА ПРОМОКОДА (новое!)
+  if (state === 'ENTERING_PROMO') {
+    if (text === '❌ Артқа қайту') {
+      await requestPromoCode(chatId, userId);
+      return;
+    }
+    
+    const promoCode = text.toUpperCase().trim();
+    const check = await checkPromoCode(promoCode, userId);
+    
+    if (check.valid) {
+      await updateUserOnboarding(userId, {
+        usedPromoCode: promoCode,
+        hasDiscount: true
+      });
+      
+      await markPromoCodeAsUsed(promoCode, userId);
+      
+      await bot.sendMessage(
+        chatId,
+        `✅ Промокод қабылданды!\n\n` +
+        `Сізге -500₸ жеңілдік берілді:\n` +
+        `2490₸ → 1990₸`,
+        { parse_mode: 'Markdown' }
+      );
+      
+      await showPayment(chatId, userId, 1990, true);
+    } else {
+      let errorMsg = '❌ Промокод қате.';
+      if (check.reason === 'not_found') {
+        errorMsg = '❌ Промокод табылмады.';
+      } else if (check.reason === 'already_used') {
+        errorMsg = '❌ Бұл промокод қолданылған.';
+      } else if (check.reason === 'own_code') {
+        errorMsg = '❌ Өз промокодыңызды қолдануға болмайды.';
+      } else if (check.reason === 'owner_not_paid') {
+        errorMsg = '❌ Промокод иесі төлем жасамаған.';
+      }
+      errorMsg += '\n\nҚайталап көріңіз немесе артқа қайтыңыз.';
+      
+      await bot.sendMessage(chatId, errorMsg, { 
+        parse_mode: 'Markdown',
+        reply_markup: {
+          keyboard: [['❌ Артқа қайту']],
+          resize_keyboard: true,
+          one_time_keyboard: true
+        }
+      });
+    }
+    
     return;
   }
 });
