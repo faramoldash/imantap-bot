@@ -617,7 +617,7 @@ bot.on('message', async (msg) => {
   if (state === 'WAITING_PROMO') {
   
     // 🎁 ДЕМО-ДОСТУП
-    if (text === '🎁 24 сағат тегін қолдану') {
+    if (text === '🎁 24 сағат тегін') {
       try {
         const demoExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // +24 часа
         
