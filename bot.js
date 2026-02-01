@@ -1342,6 +1342,42 @@ bot.onText(/\/pending/, async (msg) => {
   }
 });
 
+// ===== ВРЕМЕННАЯ КОМАНДА ДЛЯ ТЕСТА ДЕМО =====
+bot.onText(/\/activatedemo(?:\s+(\d+))?/, async (msg, match) => {
+  const adminId = msg.from.id;
+  const chatId = msg.chat.id;
+  const MAIN_ADMIN = parseInt(process.env.MAIN_ADMIN_ID);
+
+  if (adminId !== MAIN_ADMIN) {
+    return; // Только админ может использовать
+  }
+
+  const targetUserId = match && match[1] ? parseInt(match[1]) : adminId;
+
+  try {
+    const demoExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // +24 часа
+    
+    await updateUserOnboarding(targetUserId, {
+      accessType: 'demo',
+      demoExpiresAt: demoExpiresAt,
+      paymentStatus: 'unpaid', // Важно!
+      onboardingCompleted: true
+    });
+
+    bot.sendMessage(
+      chatId,
+      `✅ Демо активировано для user ${targetUserId}\n\n` +
+      `Истекает: ${demoExpiresAt.toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' })}\n\n` +
+      `Откройте Mini App для проверки.`
+    );
+    
+    console.log(`🎁 Демо активировано админом для ${targetUserId}`);
+  } catch (error) {
+    console.error('❌ Ошибка активации демо:', error);
+    bot.sendMessage(chatId, '❌ Ошибка активации');
+  }
+});
+
 // ===== HTTP API СЕРВЕР =====
 
 const server = http.createServer(async (req, res) => {
