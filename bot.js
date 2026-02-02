@@ -1378,6 +1378,33 @@ bot.onText(/\/activatedemo(?:\s+(\d+))?/, async (msg, match) => {
   }
 });
 
+// ===== ТЕСТОВАЯ КОМАНДА ДЛЯ ПРОВЕРКИ ДЕМО =====
+bot.onText(/\/checkdemo/, async (msg) => {
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+
+  try {
+    const user = await getUserById(userId);
+    const access = await getUserAccess(userId);
+    
+    const message = 
+      `🔍 *Проверка доступа*\n\n` +
+      `👤 User ID: ${userId}\n` +
+      `📋 accessType: ${user?.accessType || 'н/д'}\n` +
+      `⏰ demoExpiresAt: ${user?.demoExpiresAt ? new Date(user.demoExpiresAt).toLocaleString('ru-RU') : 'н/д'}\n` +
+      `💳 paymentStatus: ${user?.paymentStatus || 'н/д'}\n` +
+      `✅ onboardingCompleted: ${user?.onboardingCompleted || false}\n\n` +
+      `*API ответ:*\n` +
+      `hasAccess: ${access.hasAccess}\n` +
+      `paymentStatus: ${access.paymentStatus}\n` +
+      `demoExpires: ${access.demoExpires || 'н/д'}`;
+    
+    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+  } catch (error) {
+    bot.sendMessage(chatId, '❌ Ошибка: ' + error.message);
+  }
+});
+
 // ===== HTTP API СЕРВЕР =====
 
 const server = http.createServer(async (req, res) => {
