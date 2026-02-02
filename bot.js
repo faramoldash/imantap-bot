@@ -292,7 +292,7 @@ bot.on('callback_query', async (query) => {
             keyboard: [
               [{
                 text: "📱 Рамазан трекерін ашу",
-                web_app: { url: MINI_APP_URL }
+                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
               }]
             ],
             resize_keyboard: true
@@ -640,7 +640,7 @@ bot.on('message', async (msg) => {
               keyboard: [
                 [{
                   text: "📱 Рамазан трекерін ашу",
-                  web_app: { url: MINI_APP_URL }
+                  web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
                 }]
               ],
               resize_keyboard: true
@@ -983,7 +983,7 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
             keyboard: [
               [{
                 text: "📱 Рамазан трекерін ашу",
-                web_app: { url: MINI_APP_URL }
+                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
               }]
             ],
             resize_keyboard: true
@@ -1012,7 +1012,7 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
             keyboard: [
               [{
                 text: "📱 Рамазан трекерін ашу",
-                web_app: { url: MINI_APP_URL }
+                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
               }]
             ],
             resize_keyboard: true
