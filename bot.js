@@ -291,7 +291,7 @@ bot.on('callback_query', async (query) => {
           reply_markup: {
             keyboard: [
               [{
-                text: "🌙 Рамазан трекерін ашу",
+                text: "📱 Рамазан трекерін ашу",
                 web_app: { url: MINI_APP_URL }
               }]
             ],
@@ -639,7 +639,7 @@ bot.on('message', async (msg) => {
             reply_markup: {
               keyboard: [
                 [{
-                  text: "🌙 Рамазан трекерін ашу",
+                  text: "📱 Рамазан трекерін ашу",
                   web_app: { url: MINI_APP_URL }
                 }]
               ],
@@ -982,7 +982,7 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
           reply_markup: {
             keyboard: [
               [{
-                text: "🌙 Рамазан трекерін ашу",
+                text: "📱 Рамазан трекерін ашу",
                 web_app: { url: MINI_APP_URL }
               }]
             ],
@@ -1011,7 +1011,7 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
           reply_markup: {
             keyboard: [
               [{
-                text: "🌙 Рамазан трекерін ашу",
+                text: "📱 Рамазан трекерін ашу",
                 web_app: { url: MINI_APP_URL }
               }]
             ],
