@@ -401,24 +401,7 @@ async function getUserAccess(userId) {
     };
   }
   
-  // Оплата подтверждена
-  if (user.paymentStatus === 'paid') {
-    return { 
-      hasAccess: true, 
-      paymentStatus: 'paid'
-    };
-  }
-  
-  // Платёж на проверке
-  if (user.paymentStatus === 'pending') {
-    return { 
-      hasAccess: false, 
-      paymentStatus: 'pending',
-      reason: 'payment_pending'
-    };
-  }
-  
-  // Демо-доступ
+  // 🔥 ДЕМО-ДОСТУП (ПРОВЕРЯЕМ ПЕРВЫМ!)
   if (user.accessType === 'demo' && user.demoExpiresAt) {
     const expiresAt = new Date(user.demoExpiresAt);
     
@@ -436,6 +419,23 @@ async function getUserAccess(userId) {
         reason: 'demo_expired' 
       };
     }
+  }
+  
+  // Оплата подтверждена
+  if (user.paymentStatus === 'paid') {
+    return { 
+      hasAccess: true, 
+      paymentStatus: 'paid'
+    };
+  }
+  
+  // Платёж на проверке
+  if (user.paymentStatus === 'pending') {
+    return { 
+      hasAccess: false, 
+      paymentStatus: 'pending',
+      reason: 'payment_pending'
+    };
   }
   
   // Не оплачено
