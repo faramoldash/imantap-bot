@@ -292,7 +292,7 @@ bot.on('callback_query', async (query) => {
             keyboard: [
               [{
                 text: "📱 Рамазан трекерін ашу",
-                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
+                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${targetUserId}` }
               }]
             ],
             resize_keyboard: true
