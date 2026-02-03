@@ -646,7 +646,7 @@ bot.on('message', async (msg) => {
               keyboard: [
                 [{
                   text: "📱 Рамазан трекерін ашу",
-                  web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${targetUserId}` }
+                  web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
                 }]
               ],
               resize_keyboard: true
@@ -989,7 +989,7 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
             keyboard: [
               [{
                 text: "📱 Рамазан трекерін ашу",
-                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${targetUserId}` }
+                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
               }]
             ],
             resize_keyboard: true
@@ -1013,7 +1013,7 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       bot.sendMessage(
         chatId,
         `Сәлем, ${from.first_name}! 👋\n\n` +
-        `🎁 *Demo-режим белсенді* (${hoursLeft} сағат қалды)\n\n` +
+        `🎁 *Demo-режим қосулы* (${hoursLeft} сағат қалды)\n\n` +
         `Толық нұсқаға өту үшін төлем жасаңыз 👇`,
         {
           parse_mode: 'Markdown',
@@ -1021,9 +1021,9 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
             keyboard: [
               [{
                 text: "📱 Рамазан трекерін ашу",
-                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${targetUserId}` }
+                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` } // ✅ userId (НЕ targetUserId)
               }],
-              [{ text: "💳 Толық нұсқаны сатып алу" }]
+              [{ text: "💳 Толық нұсқаны сатып алу" }] // ✅ Точный текст
             ],
             resize_keyboard: true
           }
@@ -1044,7 +1044,7 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
             keyboard: [
               [{
                 text: "📱 Рамазан трекерін ашу",
-                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${targetUserId}` }
+                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
               }]
             ],
             resize_keyboard: true
