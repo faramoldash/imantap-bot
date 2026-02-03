@@ -613,6 +613,12 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  // 💳 Обработка кнопки покупки из demo режима
+  if (text === '💳 Толық нұсқаны сатып алу') {
+    await requestPromoCode(chatId, userId);
+    return;
+  }
+
   // Обработка промокода
   if (state === 'WAITING_PROMO') {
   
@@ -998,6 +1004,32 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
     
     if (!user) {
       user = await getOrCreateUser(userId, from.username);
+    }
+
+    // 🎁 DEMO РЕЖИМ - показываем кнопку покупки
+    if (user.accessType === 'demo' && user.demoExpiresAt && new Date() < new Date(user.demoExpiresAt)) {
+      const hoursLeft = Math.floor((new Date(user.demoExpiresAt) - new Date()) / (1000 * 60 * 60));
+      
+      bot.sendMessage(
+        chatId,
+        `Сәлем, ${from.first_name}! 👋\n\n` +
+        `🎁 *Demo-режим белсенді* (${hoursLeft} сағат қалды)\n\n` +
+        `Толық нұсқаға өту үшін төлем жасаңыз 👇`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            keyboard: [
+              [{
+                text: "📱 Рамазан трекерін ашу",
+                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${targetUserId}` }
+              }],
+              [{ text: "💳 Толық нұсқаны сатып алу" }]
+            ],
+            resize_keyboard: true
+          }
+        }
+      );
+      return;
     }
 
     // 🔥 ПРОВЕРКА 1: Если пользователь УЖЕ завершил онбординг И оплатил
