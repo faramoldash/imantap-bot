@@ -625,13 +625,13 @@ bot.on('message', async (msg) => {
     // 🎁 ДЕМО-ДОСТУП
     if (text === '🎁 24 сағат тегін') {
       try {
-        const demoExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // +24 часа
+        const demoExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
         
         await updateUserOnboarding(userId, {
           accessType: 'demo',
           demoExpiresAt: demoExpiresAt,
           onboardingCompleted: true,
-          paymentStatus: 'unpaid' // Важно! Статус остаётся unpaid
+          paymentStatus: 'unpaid'
         });
         
         await bot.sendMessage(
@@ -647,7 +647,8 @@ bot.on('message', async (msg) => {
                 [{
                   text: "📱 Рамазан трекерін ашу",
                   web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
-                }]
+                }],
+                [{ text: "💳 Толық нұсқаны сатып алу" }] // ✅ Добавили кнопку!
               ],
               resize_keyboard: true
             }
