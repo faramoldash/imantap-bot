@@ -1540,6 +1540,83 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // 🆕 GET /api/notify-purchase/:userId - уведомить о желании купить
+    const notifyMatch = url.pathname.match(/^\/api\/notify-purchase\/(\d+)$/);
+    if (req.method === 'GET' && notifyMatch) {
+      const userId = parseInt(notifyMatch[1]);
+      
+      if (!userId || isNaN(userId)) {
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.statusCode = 400;
+        res.end(JSON.stringify({
+          success: false,
+          error: 'Invalid userId'
+        }));
+        return;
+      }
+
+      try {
+        const user = await getUserById(userId);
+        
+        if (!user) {
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.statusCode = 404;
+          res.end(JSON.stringify({
+            success: false,
+            error: 'User not found'
+          }));
+          return;
+        }
+
+        // Отправляем сообщение пользователю
+        await bot.sendMessage(
+          userId,
+          `💳 *Толық нұсқаға өту*\n\n` +
+          `Imantap Premium мүмкіндіктері ұнады ма? 🌙\n\n` +
+          `✓ Рамазанның 30 күніне арналған трекер\n` +
+          `✓ Алланың 99 есімі\n` +
+          `✓ Құранды пара бойынша оқу\n` +
+          `✓ Марапаттар мен XP жүйесі\n` +
+          `✓ Лидерборд\n\n` +
+          `Бағасы: *2 490₸*\n` +
+          `Промокод бар болса: *1 990₸*\n\n` +
+          `Төлем жасау үшін төмендегі батырманы басыңыз 👇`,
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              keyboard: [
+                [{
+                  text: "📱 Рамазан трекерін ашу",
+                  web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
+                }],
+                [{ text: "💳 Толық нұсқаны сатып алу" }]
+              ],
+              resize_keyboard: true
+            }
+          }
+        );
+
+        console.log(`💳 Отправлено предложение покупки пользователю ${userId}`);
+
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.statusCode = 200;
+        res.end(JSON.stringify({
+          success: true,
+          message: 'Notification sent'
+        }));
+
+      } catch (error) {
+        console.error('❌ Ошибка отправки уведомления:', error);
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.statusCode = 500;
+        res.end(JSON.stringify({
+          success: false,
+          error: 'Failed to send notification'
+        }));
+      }
+      return;
+    }
+
     // POST /api/user/:userId/sync - синхронизировать прогресс
     const syncMatch = url.pathname.match(/^\/api\/user\/(\d+)\/sync$/);
     if (req.method === 'POST' && syncMatch) {
