@@ -615,7 +615,37 @@ bot.on('message', async (msg) => {
 
   // 💳 Обработка кнопки покупки из demo режима
   if (text === '💳 Толық нұсқаны сатып алу') {
-    await requestPromoCode(chatId, userId);
+    const user = await getUserById(userId);
+    const session = getSession(userId);
+    
+    // Если пришёл по реферальной ссылке - сразу скидка
+    if (session.data.referralCode || user?.referredBy) {
+      await showPayment(chatId, userId, 1990, true);
+      return;
+    }
+    
+    // 💳 Показываем ТОЛЬКО варианты оплаты (БЕЗ demo)
+    await bot.sendMessage(
+      chatId,
+      `💳 *Толық нұсқаға өту*\n\n` +
+      `Imantap Premium бағасы:\n\n` +
+      `• Қалыпты баға: *2 490₸*\n` +
+      `• Промокод бар болса: *1 990₸*\n\n` +
+      `Промокод бар ма?`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          keyboard: [
+            [{ text: '💳 Төлем жасау' }],
+            [{ text: '🎟️ Менде промокод бар' }]
+          ],
+          resize_keyboard: true,
+          one_time_keyboard: true
+        }
+      }
+    );
+    
+    setState(userId, 'WAITING_PROMO');
     return;
   }
 
