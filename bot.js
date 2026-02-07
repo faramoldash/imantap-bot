@@ -2,6 +2,8 @@
 import TelegramBot from 'node-telegram-bot-api';
 import http from 'http';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
 import { connectDB, getDB, createIndexes } from './db.js';
 import { getPrayerTimesByCity, calculateReminderTime, updateUserPrayerTimes } from './prayerTimesService.js';
 import {
@@ -2353,6 +2355,49 @@ const server = http.createServer(async (req, res) => {
       }));
       return;
     }
+
+        // Обработка статических файлов и React SPA
+        // Если запрос НЕ к API, обслуживаем статические файлы
+        if (!url.pathname.startsWith('/api/')) {
+                try {
+                          const filePath = url.pathname === '/' ? '/index.html' : url.pathname;
+                          const fullPath = path.join(process.cwd(), 'dist', filePath);
+
+                          // Проверяем существование файла
+                          if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
+                                      const ext = path.extname(fullPath);
+                                      const contentTypes = {
+                                                    '.html': 'text/html',
+                                                    '.js': 'application/javascript',
+                                                    '.css': 'text/css',
+                                                    '.json': 'application/json',
+                                                    '.png': 'image/png',
+                                                    '.jpg': 'image/jpg',
+                                                    '.svg': 'image/svg+xml'
+                                                                };
+                                      const contentType = contentTypes[ext] || 'text/plain';
+
+                                      const fileContent = fs.readFileSync(fullPath);
+                                      res.statusCode = 200;
+                                      res.setHeader('Content-Type', contentType);
+                                      res.end(fileContent);
+                                      return;
+                                    } else {
+                                      // Файл не найден, отдаем index.html для client-side routing
+                                      const indexPath = path.join(process.cwd(), 'dist', 'index.html');
+                                      if (fs.existsSync(indexPath)) {
+                                                    const indexContent = fs.readFileSync(indexPath);
+                                                    res.statusCode = 200;
+                                                    res.setHeader('Content-Type', 'text/html');
+                                                    res.end(indexContent);
+                                                    return;
+                                                  }
+                                    }
+                        } catch (err) {
+                          console.error('Ошибка чтения файла:', err);
+                          // Продолжаем к 404
+                        }
+              }
 
     // 404 Not Found
     res.statusCode = 404;
