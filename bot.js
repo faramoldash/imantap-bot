@@ -2356,6 +2356,44 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // ========== API ЭНДПОИНТЫ ДЛЯ ЛИДЕРБОРДА ==========
+
+    // GET /api/leaderboard/global - Глобальный лидерборд
+    if (req.method === 'GET' && url.pathname === '/api/leaderboard/global') {
+      try {
+        const limit = parseInt(url.searchParams.get('limit')) || 10;
+        const leaderboard = await getGlobalLeaderboard(limit);
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.statusCode = 200;
+        res.end(JSON.stringify({ success: true, data: leaderboard }));
+      } catch (error) {
+        console.error('Ошибка получения глобального лидерборда:', error);
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.end(JSON.stringify({ success: false, error: 'Ошибка сервера' }));
+      }
+      return;
+    }
+
+    // GET /api/leaderboard/friends/:userId - Лидерборд друзей
+    const friendsLeaderboardMatch = url.pathname.match(/^\/api\/leaderboard\/friends\/(\d+)$/);
+    if (req.method === 'GET' && friendsLeaderboardMatch) {
+      const userId = parseInt(friendsLeaderboardMatch[1]);
+      try {
+        const limit = parseInt(url.searchParams.get('limit')) || 10;
+        const leaderboard = await getFriendsLeaderboard(userId, limit);
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.statusCode = 200;
+        res.end(JSON.stringify({ success: true, data: leaderboard }));
+      } catch (error) {
+        console.error('Ошибка получения лидерборда друзей:', error);
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.end(JSON.stringify({ success: false, error: 'Ошибка сервера' }));
+      }
+      return;
+    }
+
         // Обработка статических файлов и React SPA
         // Если запрос НЕ к API, обслуживаем статические файлы
         if (!url.pathname.startsWith('/api/')) {
