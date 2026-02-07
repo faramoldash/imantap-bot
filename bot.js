@@ -244,6 +244,70 @@ schedule.scheduleJob('0 0 * * *', async () => {
   console.log(`✅ Обновлено: ${updated}/${allUsers.length} пользователей`);
 });
 
+// 📊 Напоминание отметить прогресс (каждый день в 20:00)
+schedule.scheduleJob('0 20 * * *', async () => {
+  console.log('📊 Проверка прогресса пользователей...');
+  
+  const db = getDB();
+  const users = db.collection('users');
+  
+  const today = new Date().toISOString().split('T')[0];
+  
+  // Пользователи которые не отмечали прогресс сегодня
+  const inactiveUsers = await users.find({
+    paymentStatus: { $in: ['paid', 'demo'] },
+    'notificationSettings.ramadanReminders': { $ne: false },
+    $or: [
+      { lastActiveDate: { $ne: today } },
+      { lastActiveDate: { $exists: false } }
+    ]
+  }).toArray();
+  
+  let sentCount = 0;
+  
+  for (const user of inactiveUsers) {
+    try {
+      const message = user.language === 'kk'
+        ? `📲 *Бүгін әлі ештеңе белгіленбеді!*
+
+Прогрессіңізді белгілеуді ұмытпаңыз! 🌙
+
+Әр белгі — бұл сіздің руханилығыңызға қадам! 💪
+
+Қазір белгілеңіз! 👇`
+        : `📲 *Сегодня еще ничего не отмечено!*
+
+Не забудьте отметить свой прогресс! 🌙
+
+Каждая отметка — это шаг к духовности! 💪
+
+Отметьте сейчас! 👇`;
+      
+      await bot.sendMessage(user.userId, message, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          keyboard: [[{
+            text: '📱 ImanTap ашу',
+            web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${user.userId}` }
+          }]],
+          resize_keyboard: true
+        }
+      });
+      
+      sentCount++;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } catch (error) {
+      console.error(`❌ Напоминание ${user.userId}:`, error.message);
+    }
+  }
+  
+  if (sentCount > 0) {
+    console.log(`✅ Напоминания о прогрессе: ${sentCount} пользователей`);
+  }
+});
+
+console.log('✅ Напоминание о прогрессе настроено (20:00)\n');
+
 console.log('✅ Автообновление времен настроено (00:00)\n');
 
 // =====================================================
@@ -286,6 +350,95 @@ bot.on('callback_query', async (query) => {
       }
     }
     return; // Важно! Выходим после обработки
+  }
+
+  // ⚙️ НАСТРОЙКИ - Смена города
+  if (data === 'change_city') {
+    await bot.answerCallbackQuery(query.id);
+    await bot.sendMessage(chatId, '📍 Жаңа қаланы жазыңыз:\n\nМысалы: Астана, Алматы, Шымкент, Ташкент', {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        keyboard: [
+          ['Астана', 'Алматы'],
+          ['Шымкент', 'Ақтөбе'],
+          ['Қарағанды', 'Тараз'],
+          ['Атырау', 'Ақтау'],
+          ['❌ Болдырмау']
+        ],
+        resize_keyboard: true,
+        one_time_keyboard: true
+      }
+    });
+    setState(userId, 'CHANGING_CITY');
+    return;
+  }
+
+  // 🔔 НАСТРОЙКИ - Вкл/Откл уведомлений
+  if (data === 'toggle_notifications') {
+    try {
+      const user = await getUserById(userId);
+      const newValue = !(user.notificationSettings?.ramadanReminders !== false);
+      
+      await updateUserOnboarding(userId, {
+        notificationSettings: {
+          ramadanReminders: newValue,
+          reminderMinutesBefore: 30
+        }
+      });
+      
+      await bot.answerCallbackQuery(query.id, {
+        text: newValue ? '✅ Хабарландырулар қосылды' : '🔕 Хабарландырулар өшірілді',
+        show_alert: true
+      });
+      
+      // Обновляем сообщение
+      const prayerTimesInfo = user.prayerTimes 
+        ? `✅ *Намаз уақыттары:*\n🌅 Таң: ${user.prayerTimes.fajr}\n🌆 Ақшам: ${user.prayerTimes.maghrib}`
+        : '⚠️ Намаз уақыттары белгіленбеген';
+      
+      const updatedMessage = `⚙️ *Сіздің баптауларыңыз:*\n\n📍 *Қала:* ${user.location?.city || 'Белгісіз'}\n\n${prayerTimesInfo}\n\n🔔 *Хабарландырулар:* ${newValue ? '✅ Қосулы' : '❌ Өшірулі'}`;
+      
+      await bot.editMessageText(updatedMessage, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '📍 Қаланы өзгерту', callback_data: 'change_city' }],
+            [{ text: newValue ? '🔕 Хабарландыруды өшіру' : '🔔 Хабарландыруды қосу', callback_data: 'toggle_notifications' }],
+            [{ text: '🔄 Уақытты жаңарту', callback_data: 'update_prayer_times' }]
+          ]
+        }
+      });
+    } catch (error) {
+      console.error('toggle_notifications ошибка:', error);
+      await bot.answerCallbackQuery(query.id, { text: '❌ Қате', show_alert: true });
+    }
+    return;
+  }
+
+  // 🔄 НАСТРОЙКИ - Обновить времена намазов
+  if (data === 'update_prayer_times') {
+    try {
+      const success = await updateUserPrayerTimes(userId);
+      
+      if (success) {
+        const user = await getUserById(userId);
+        await bot.answerCallbackQuery(query.id, {
+          text: `✅ Жаңартылды!\n🌅 ${user.prayerTimes.fajr}\n🌆 ${user.prayerTimes.maghrib}`,
+          show_alert: true
+        });
+      } else {
+        await bot.answerCallbackQuery(query.id, {
+          text: '⚠️ Қала мәліметі жоқ',
+          show_alert: true
+        });
+      }
+    } catch (error) {
+      console.error('update_prayer_times ошибка:', error);
+      await bot.answerCallbackQuery(query.id, { text: '❌ Қате', show_alert: true });
+    }
+    return;
   }
 
   // ==========================================
@@ -355,10 +508,12 @@ bot.on('callback_query', async (query) => {
         {
           reply_markup: {
             keyboard: [
-              [{
-                text: "📱 Рамазан трекерін ашу",
+              [{ 
+                text: '📱 ImanTap ашу', 
                 web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${targetUserId}` }
-              }]
+              }],
+              ['⚙️ Баптаулар', '📊 Статистика'],
+              ['🎁 Менің промокодым']
             ],
             resize_keyboard: true
           }
@@ -632,6 +787,92 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  // 🎯 ОБРАБОТКА КНОПОК-КОМАНД
+  if (text === '⚙️ Баптаулар') {
+    // Показываем настройки
+    try {
+      const user = await getUserById(userId);
+      
+      if (!user) {
+        bot.sendMessage(chatId, '⚠️ Пайдаланушы табылмады. /start басыңыз');
+        return;
+      }
+      
+      const prayerTimesInfo = user.prayerTimes 
+        ? `✅ *Намаз уақыттары:*\n🌅 Таң: ${user.prayerTimes.fajr}\n🌆 Ақшам: ${user.prayerTimes.maghrib}\n\n📅 Жаңартылды: ${new Date(user.prayerTimes.lastUpdated).toLocaleDateString('kk-KZ')}`
+        : '⚠️ Намаз уақыттары белгіленбеген';
+      
+      const message = `⚙️ *Сіздің баптауларыңыз:*\n\n📍 *Қала:* ${user.location?.city || 'Белгісіз'}\n🌍 *Ел:* ${user.location?.country || 'Белгісіз'}\n\n${prayerTimesInfo}\n\n🔔 *Хабарландырулар:*\n${user.notificationSettings?.ramadanReminders !== false ? '✅ Қосулы' : '❌ Өшірулі'}\n\nӨзгерту үшін төмендегі батырмаларды басыңыз:`;
+      
+      bot.sendMessage(chatId, message, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '📍 Қаланы өзгерту', callback_data: 'change_city' }],
+            [{ text: user.notificationSettings?.ramadanReminders !== false ? '🔕 Хабарландыруды өшіру' : '🔔 Хабарландыруды қосу', callback_data: 'toggle_notifications' }],
+            [{ text: '🔄 Уақытты жаңарту', callback_data: 'update_prayer_times' }]
+          ]
+        }
+      });
+    } catch (error) {
+      console.error('settings ошибка:', error);
+      bot.sendMessage(chatId, '❌ Қате. Қайта көріңіз.');
+    }
+    return;
+  }
+  
+  if (text === '📊 Статистика') {
+    // Показываем статистику
+    try {
+      const user = await getUserById(userId);
+      
+      if (!user) {
+        bot.sendMessage(chatId, '⚠️ Пайдаланушы табылмады. /start басыңыз');
+        return;
+      }
+      
+      bot.sendMessage(chatId, 
+        `📊 *Статистика:*\n\n` +
+        `👤 User ID: ${user.userId}\n` +
+        `🎁 Промокод: ${user.promoCode}\n` +
+        `👥 Шақырылғандар: ${user.invitedCount}\n` +
+        `📅 Тіркелген күн: ${user.createdAt.toLocaleDateString('kk-KZ')}`,
+        { parse_mode: 'Markdown' }
+      );
+    } catch (error) {
+      console.error('stats ошибка:', error);
+      bot.sendMessage(chatId, '❌ Қате. Қайта көріңіз.');
+    }
+    return;
+  }
+  
+  if (text === '🎁 Менің промокодым') {
+    // Показываем промокод
+    try {
+      const user = await getUserById(userId);
+      
+      if (!user) {
+        bot.sendMessage(chatId, '⚠️ Пайдаланушы табылмады. /start басыңыз');
+        return;
+      }
+      
+      const botUsername = 'imantap_bot';
+      const referralLink = `https://t.me/${botUsername}?start=ref_${user.promoCode}`;
+      
+      const message = `🎁 *Сіздің промокодыңыз:*\n\n` +
+        `📋 \`${user.promoCode}\`\n\n` +
+        `👥 Шақырылғандар: ${user.invitedCount}\n\n` +
+        `${referralLink}\n\n` +
+        `Достарыңызды шақырыңыз! 🚀`;
+      
+      bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+    } catch (error) {
+      console.error('mycode ошибка:', error);
+      bot.sendMessage(chatId, '❌ Қате. Қайта көріңіз.');
+    }
+    return;
+  }
+
   // Выбор города вручную
   if (state === 'WAITING_LOCATION') {
     let city = text.replace(/[🌍📍]/g, '').trim();
@@ -666,6 +907,90 @@ bot.on('message', async (msg) => {
     await updateUserPrayerTimes(userId);
     
     await requestPromoCode(chatId, userId);
+    return;
+  }
+
+  // 📍 СМЕНА ГОРОДА (через настройки)
+  if (state === 'CHANGING_CITY') {
+    let city = text.trim();
+    
+    if (city === '❌ Болдырмау') {
+      await bot.sendMessage(chatId, 'Болдырылды ✅', {
+        reply_markup: {
+          keyboard: [
+            [{ 
+              text: '📱 ImanTap ашу', 
+              web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
+            }],
+            ['⚙️ Баптаулар', '📊 Статистика'],
+            ['🎁 Менің промокодым']
+          ],
+          resize_keyboard: true
+        }
+      });
+      clearSession(userId);
+      return;
+    }
+    
+    if (!city) {
+      await bot.sendMessage(chatId, '❌ Қала атауын жазыңыз');
+      return;
+    }
+    
+    try {
+      await updateUserOnboarding(userId, {
+        location: { city, country: 'Kazakhstan', latitude: null, longitude: null }
+      });
+      
+      // ✅ Обновляем времена намазов для нового города
+      const success = await updateUserPrayerTimes(userId);
+      
+      if (success) {
+        const user = await getUserById(userId);
+        await bot.sendMessage(chatId, 
+          `✅ Қала өзгертілді: *${city}*\n\n` +
+          `🌅 Таң намазы: ${user.prayerTimes.fajr}\n` +
+          `🌆 Ақшам намазы: ${user.prayerTimes.maghrib}`,
+          { 
+            parse_mode: 'Markdown',
+            reply_markup: {
+              keyboard: [
+                [{ 
+                  text: '📱 ImanTap ашу', 
+                  web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
+                }],
+                ['⚙️ Баптаулар', '📊 Статистика'],
+                ['🎁 Менің промокодым']
+              ],
+              resize_keyboard: true
+            }
+          }
+        );
+      } else {
+        await bot.sendMessage(chatId, 
+          `✅ Қала өзгертілді: *${city}*\n\n⚠️ Намаз уақыттары табылмады. /settings арқылы қайталап көріңіз.`, 
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              keyboard: [
+                [{ 
+                  text: '📱 ImanTap ашу', 
+                  web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
+                }],
+                ['⚙️ Баптаулар', '📊 Статистика'],
+                ['🎁 Менің промокодым']
+              ],
+              resize_keyboard: true
+            }
+          }
+        );
+      }
+      
+      clearSession(userId);
+    } catch (error) {
+      console.error('CHANGING_CITY ошибка:', error);
+      await bot.sendMessage(chatId, '❌ Қате. Қайталап көріңіз.');
+    }
     return;
   }
 
@@ -1277,6 +1602,60 @@ bot.onText(/\/stats/, async (msg) => {
   } catch (error) {
     console.error('❌ Ошибка в /stats:', error);
     bot.sendMessage(chatId, '❌ Қате орын алды. Қайталап көріңіз.');
+  }
+});
+
+// ⚙️ КОМАНДА /settings - Баптаулар
+bot.onText(/\/settings/, async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from?.id;
+  
+  if (!userId) {
+    bot.sendMessage(chatId, '❌ User ID не найден');
+    return;
+  }
+  
+  try {
+    const user = await getUserById(userId);
+    
+    if (!user) {
+      bot.sendMessage(chatId, '⚠️ Пользователь не найден. Напишите /start');
+      return;
+    }
+    
+    const prayerTimesInfo = user.prayerTimes 
+      ? `✅ *Намаз уақыттары:*
+🌅 Таң: ${user.prayerTimes.fajr}
+🌆 Ақшам: ${user.prayerTimes.maghrib}
+
+📅 Жаңартылды: ${new Date(user.prayerTimes.lastUpdated).toLocaleDateString('kk-KZ')}`
+      : '⚠️ Намаз уақыттары белгіленбеген';
+    
+    const message = `⚙️ *Сіздің баптауларыңыз:*
+
+📍 *Қала:* ${user.location?.city || 'Белгісіз'}
+🌍 *Ел:* ${user.location?.country || 'Белгісіз'}
+
+${prayerTimesInfo}
+
+🔔 *Хабарландырулар:*
+${user.notificationSettings?.ramadanReminders !== false ? '✅ Қосулы' : '❌ Өшірулі'}
+
+Өзгерту үшін төмендегі батырмаларды басыңыз:`;
+    
+    bot.sendMessage(chatId, message, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '📍 Қаланы өзгерту', callback_data: 'change_city' }],
+          [{ text: user.notificationSettings?.ramadanReminders !== false ? '🔕 Хабарландыруды өшіру' : '🔔 Хабарландыруды қосу', callback_data: 'toggle_notifications' }],
+          [{ text: '🔄 Уақытты жаңарту', callback_data: 'update_prayer_times' }]
+        ]
+      }
+    });
+  } catch (error) {
+    console.error('settings ошибка:', error);
+    bot.sendMessage(chatId, '❌ Қате. Қайта көріңіз.');
   }
 });
 
