@@ -40,21 +40,65 @@ export function getDB() {
  * Создать индексы для оптимизации
  */
 export async function createIndexes() {
+  console.log('📊 Создание индексов...');
+  
+  const db = getDB();
+  
+  // Users collection
+  const users = db.collection('users');
+  
   try {
-    const db = getDB();
+    // ✅ Основные индексы
+    await users.createIndex({ userId: 1 }, { unique: true });
+    console.log('✅ Index: userId');
     
-    // Индексы для users
-    await db.collection('users').createIndex({ userId: 1 }, { unique: true });
-    await db.collection('users').createIndex({ promoCode: 1 }, { unique: true });
-    await db.collection('users').createIndex({ paymentStatus: 1 });
-    await db.collection('users').createIndex({ accessType: 1 });
-    await db.collection('users').createIndex({ createdAt: 1 });
+    await users.createIndex({ promoCode: 1 }, { unique: true });
+    console.log('✅ Index: promoCode');
     
-    // Индексы для used_promocodes
-    await db.collection('used_promocodes').createIndex({ promoCode: 1 }, { unique: true });
-    await db.collection('used_promocodes').createIndex({ usedBy: 1 });
+    // ✅ Индексы для поиска
+    await users.createIndex({ username: 1 });
+    console.log('✅ Index: username');
     
-    console.log('✅ Индексы созданы успешно');
+    await users.createIndex({ phoneNumber: 1 });
+    console.log('✅ Index: phoneNumber');
+    
+    // ✅ Индексы для фильтрации
+    await users.createIndex({ paymentStatus: 1 });
+    console.log('✅ Index: paymentStatus');
+    
+    await users.createIndex({ onboardingCompleted: 1 });
+    console.log('✅ Index: onboardingCompleted');
+    
+    // ✅ Индексы для времен намазов
+    await users.createIndex({ 'prayerTimes.fajr': 1 });
+    console.log('✅ Index: prayerTimes.fajr');
+    
+    await users.createIndex({ 'prayerTimes.maghrib': 1 });
+    console.log('✅ Index: prayerTimes.maghrib');
+    
+    // ✅ Индексы для demo режима
+    await users.createIndex({ demoExpiresAt: 1 });
+    console.log('✅ Index: demoExpiresAt');
+    
+    await users.createIndex({ accessType: 1 });
+    console.log('✅ Index: accessType');
+    
+    // ✅ Индекс для поиска по городу
+    await users.createIndex({ 'location.city': 1 });
+    console.log('✅ Index: location.city');
+    
+    // ✅ Составной индекс для активных пользователей с временами намазов
+    await users.createIndex({ 
+      paymentStatus: 1, 
+      'prayerTimes.fajr': 1 
+    });
+    console.log('✅ Composite Index: paymentStatus + prayerTimes.fajr');
+    
+    // ✅ Индекс для поиска неактивных пользователей
+    await users.createIndex({ lastActiveDate: 1 });
+    console.log('✅ Index: lastActiveDate');
+    
+    console.log('🎉 Все индексы успешно созданы!');
   } catch (error) {
     console.error('❌ Ошибка создания индексов:', error);
   }
