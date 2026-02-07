@@ -65,6 +65,12 @@ export async function createIndexes() {
     // ✅ Индексы для фильтрации
     await users.createIndex({ paymentStatus: 1 });
     console.log('✅ Index: paymentStatus');
+
+    await users.createIndex({ xp: -1 });
+    console.log('✅ Index: xp');
+
+    await users.createIndex({ referredBy: 1 });
+    console.log('✅ Index: referredBy');
     
     await users.createIndex({ onboardingCompleted: 1 });
     console.log('✅ Index: onboardingCompleted');

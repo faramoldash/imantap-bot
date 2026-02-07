@@ -20,7 +20,10 @@ import {
   rejectPayment,
   getUserAccess,
   getPendingPayments,
-  addUserXP
+  addUserXP,
+  getGlobalLeaderboard,
+  getUserRank,
+  getFriendsLeaderboard
 } from './userService.js';
 import {
   isAdmin,
@@ -1533,8 +1536,12 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
         });
         
         // ✅ НАЧИСЛЯЕМ +100 XP ОБОИМ
-        await addUserXP(userId, 100, 'Регистрация по реферальной ссылке');
-        await addUserXP(inviter.userId, 100, `Реферал: пользователь ${userId} зарегистрировался`);
+        try {
+          await addUserXP(userId, 100, 'Регистрация по реферальной ссылке');
+          await addUserXP(inviter.userId, 100, `Реферал: пользователь ${userId} зарегистрировался`);
+        } catch (error) {
+          console.error('❌ Ошибка начисления XP при регистрации:', error);
+        }
         
         bot.sendMessage(
           chatId,
@@ -1554,7 +1561,8 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
             `🎉 *Жаңа реферал!*\n\n` +
             `Сіздің промокодыңыз бойынша тіркелді!\n` +
             `🎯 Сіз алдыңыз: +100 XP\n\n` +
-            `Барлық рефералдар: ${inviter.invitedCount + 1} 🔥`
+            `Барлық рефералдар: ${inviter.invitedCount + 1} 🔥`,
+            { parse_mode: 'Markdown' }
           );
         } catch (e) {
           // Пользователь мог заблокировать бота
@@ -2180,6 +2188,82 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({
           success: false,
           error: 'Failed to send notification'
+        }));
+      }
+      return;
+    }
+
+    // GET /api/leaderboard - глобальный лидерборд
+    if (req.method === 'GET' && url.pathname === '/api/leaderboard') {
+      try {
+        const limit = parseInt(url.searchParams.get('limit') || '50');
+        const leaderboard = await getGlobalLeaderboard(limit);
+        
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.statusCode = 200;
+        res.end(JSON.stringify({
+          success: true,
+          data: leaderboard
+        }));
+      } catch (error) {
+        console.error('❌ Ошибка получения leaderboard:', error);
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.end(JSON.stringify({ 
+          success: false, 
+          error: 'Failed to load leaderboard' 
+        }));
+      }
+      return;
+    }
+
+    // GET /api/user/:userId/rank - позиция в рейтинге
+    const rankMatch = url.pathname.match(/^\/api\/user\/(\d+)\/rank$/);
+    if (req.method === 'GET' && rankMatch) {
+      const userId = parseInt(rankMatch[1]);
+      
+      try {
+        const rankData = await getUserRank(userId);
+        
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.statusCode = 200;
+        res.end(JSON.stringify({
+          success: true,
+          data: rankData
+        }));
+      } catch (error) {
+        console.error('❌ Ошибка получения rank:', error);
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.end(JSON.stringify({ 
+          success: false, 
+          error: 'Failed to get rank' 
+        }));
+      }
+      return;
+    }
+
+    // GET /api/user/:userId/friends - лидерборд друзей
+    const friendsMatch = url.pathname.match(/^\/api\/user\/(\d+)\/friends$/);
+    if (req.method === 'GET' && friendsMatch) {
+      const userId = parseInt(friendsMatch[1]);
+      
+      try {
+        const friends = await getFriendsLeaderboard(userId, 20);
+        
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.statusCode = 200;
+        res.end(JSON.stringify({
+          success: true,
+          data: friends
+        }));
+      } catch (error) {
+        console.error('❌ Ошибка получения friends:', error);
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.end(JSON.stringify({ 
+          success: false, 
+          error: 'Failed to load friends' 
         }));
       }
       return;

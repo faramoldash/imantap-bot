@@ -50,10 +50,6 @@ async function getOrCreateUser(userId, username = null) {
         ramadanReminders: true,
         reminderMinutesBefore: 30
       },
-      notificationSettings: { // ✅ ДОБАВЬТЕ настройки уведомлений
-        ramadanReminders: true,
-        reminderMinutesBefore: 30
-      },
       
       // Реферальная система
       referredBy: null,
@@ -522,6 +518,111 @@ async function addUserXP(userId, amount, reason = '') {
   }
 }
 
+/**
+ * Получить глобальный лидерборд (топ пользователей по XP)
+ */
+async function getGlobalLeaderboard(limit = 50) {
+  try {
+    const db = getDB();
+    const users = db.collection('users');
+    
+    const leaderboard = await users.find({
+      paymentStatus: { $in: ['paid', 'demo'] }, // Только активные пользователи
+      xp: { $gt: 0 } // У кого есть XP
+    })
+    .sort({ xp: -1 }) // Сортировка по убыванию XP
+    .limit(limit)
+    .project({
+      userId: 1,
+      username: 1,
+      name: 1,
+      photoUrl: 1,
+      xp: 1,
+      currentStreak: 1,
+      unlockedBadges: 1,
+      invitedCount: 1
+    })
+    .toArray();
+    
+    return leaderboard;
+  } catch (error) {
+    console.error('❌ getGlobalLeaderboard ошибка:', error);
+    throw error;
+  }
+}
+
+/**
+ * Получить рейтинг пользователя (его позицию в лидерборде)
+ */
+async function getUserRank(userId) {
+  try {
+    const db = getDB();
+    const users = db.collection('users');
+    
+    const user = await users.findOne({ userId: parseInt(userId) });
+    
+    if (!user) {
+      return { rank: null, totalUsers: 0 };
+    }
+    
+    // Считаем сколько пользователей имеют больше XP
+    const rank = await users.countDocuments({
+      paymentStatus: { $in: ['paid', 'demo'] },
+      xp: { $gt: user.xp }
+    }) + 1;
+    
+    const totalUsers = await users.countDocuments({
+      paymentStatus: { $in: ['paid', 'demo'] },
+      xp: { $gt: 0 }
+    });
+    
+    return { rank, totalUsers, userXP: user.xp };
+  } catch (error) {
+    console.error('❌ getUserRank ошибка:', error);
+    throw error;
+  }
+}
+
+/**
+ * Получить лидерборд друзей (пользователей приглашенных одним реферером)
+ */
+async function getFriendsLeaderboard(userId, limit = 20) {
+  try {
+    const db = getDB();
+    const users = db.collection('users');
+    
+    // Получаем промокод пользователя
+    const user = await users.findOne({ userId: parseInt(userId) });
+    
+    if (!user) {
+      return [];
+    }
+    
+    // Находим всех кто был приглашен этим промокодом
+    const friends = await users.find({
+      referredBy: user.promoCode,
+      paymentStatus: { $in: ['paid', 'demo'] }
+    })
+    .sort({ xp: -1 })
+    .limit(limit)
+    .project({
+      userId: 1,
+      username: 1,
+      name: 1,
+      photoUrl: 1,
+      xp: 1,
+      currentStreak: 1,
+      unlockedBadges: 1
+    })
+    .toArray();
+    
+    return friends;
+  } catch (error) {
+    console.error('❌ getFriendsLeaderboard ошибка:', error);
+    throw error;
+  }
+}
+
 // =====================================================
 // ЭКСПОРТЫ (ТОЛЬКО ОДИН РАЗ!)
 // =====================================================
@@ -542,5 +643,8 @@ export {
   getUserAccess,
   getPendingPayments,
   checkDemoExpiration,
-  addUserXP
+  addUserXP,
+  getGlobalLeaderboard,
+  getUserRank,
+  getFriendsLeaderboard
 };
