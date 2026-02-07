@@ -33,9 +33,27 @@ async function getOrCreateUser(userId, username = null) {
         city: null,
         country: null,
         latitude: null,
-        longitude: null
+        longitude: null,
+        timezone: null
       },
-      timezone: null,
+
+      prayerTimes: { // ✅ ДОБАВЬТЕ новое поле
+        fajr: null,
+        sunrise: null,
+        dhuhr: null,
+        asr: null,
+        maghrib: null,
+        isha: null,
+        lastUpdated: null
+      },
+      notificationSettings: { // ✅ ДОБАВЬТЕ настройки уведомлений
+        ramadanReminders: true,
+        reminderMinutesBefore: 30
+      },
+      notificationSettings: { // ✅ ДОБАВЬТЕ настройки уведомлений
+        ramadanReminders: true,
+        reminderMinutesBefore: 30
+      },
       
       // Реферальная система
       referredBy: null,
