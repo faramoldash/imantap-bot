@@ -38,6 +38,40 @@ import {
 } from './sessionManager.js';
 import schedule from 'node-schedule';
 
+// ✅ Простая защита от DDOS
+const requestCounts = new Map();
+const RATE_LIMIT = 100; // максимум запросов
+const RATE_WINDOW = 60000; // за 1 минуту
+
+function checkRateLimit(userId) {
+  const now = Date.now();
+  const userRequests = requestCounts.get(userId) || [];
+  
+  // Удаляем старые запросы
+  const recentRequests = userRequests.filter(time => now - time < RATE_WINDOW);
+  
+  if (recentRequests.length >= RATE_LIMIT) {
+    return false; // Превышен лимит
+  }
+  
+  recentRequests.push(now);
+  requestCounts.set(userId, recentRequests);
+  return true;
+}
+
+// Очистка старых данных каждые 5 минут
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, requests] of requestCounts.entries()) {
+    const recentRequests = requests.filter(time => now - time < RATE_WINDOW);
+    if (recentRequests.length === 0) {
+      requestCounts.delete(userId);
+    } else {
+      requestCounts.set(userId, recentRequests);
+    }
+  }
+}, 5 * 60000);
+
 dotenv.config();
 
 // Валидация переменных окружения
@@ -1910,22 +1944,42 @@ bot.onText(/\/checkdemo/, async (msg) => {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://localhost:${PORT}`);
   
-  // CORS заголовки - разрешаем запросы с фронтенда
-  const allowedOrigins = [
-    'https://imantap-production-6776.up.railway.app',
-    'https://web.telegram.org',
-    'http://localhost:3000',
-    'http://localhost:5173'
-  ];
-  
+  // ✅ УСИЛЕННАЯ CORS ПОЛИТИКА
+  const allowedOrigins = process.env.NODE_ENV === 'production' 
+    ? [
+        'https://imantap-production-6776.up.railway.app',
+        'https://web.telegram.org'
+      ]
+    : [
+        'https://imantap-production-6776.up.railway.app',
+        'https://web.telegram.org',
+        'http://localhost:3000',
+        'http://localhost:5173'
+      ];
+
   const origin = req.headers.origin;
+
+  // ✅ Проверяем origin
+  if (!origin || !allowedOrigins.includes(origin)) {
+    // Если origin неизвестный - блокируем
+    if (req.method !== 'GET' && req.method !== 'OPTIONS') {
+      res.statusCode = 403;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ 
+        success: false, 
+        error: 'Forbidden: Invalid origin' 
+      }));
+      return;
+    }
+  }
+
+  // ✅ Разрешаем только проверенные origins
   if (allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
   }
-  
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
 
   if (req.method === 'OPTIONS') {
     res.statusCode = 200;
@@ -1938,6 +1992,17 @@ const server = http.createServer(async (req, res) => {
     const userMatch = url.pathname.match(/^\/api\/user\/(\d+)$/);
     if (req.method === 'GET' && userMatch) {
       const userId = parseInt(userMatch[1]);
+      // ✅ Добавить ЭТУ ПРОВЕРКУ
+      if (!checkRateLimit(userId)) {
+        res.statusCode = 429;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ 
+          success: false, 
+          error: 'Too many requests. Please try again later.' 
+        }));
+        return;
+      }
+
       
       const user = await getUserById(userId);
       
@@ -1969,6 +2034,16 @@ const server = http.createServer(async (req, res) => {
     const userFullMatch = url.pathname.match(/^\/api\/user\/(\d+)\/full$/);
     if (req.method === 'GET' && userFullMatch) {
       const userId = parseInt(userFullMatch[1]);
+      // ✅ Добавить ЭТУ ПРОВЕРКУ
+      if (!checkRateLimit(userId)) {
+        res.statusCode = 429;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ 
+          success: false, 
+          error: 'Too many requests. Please try again later.' 
+        }));
+        return;
+      }
       
       const userData = await getUserFullData(userId);
       
@@ -2088,6 +2163,15 @@ const server = http.createServer(async (req, res) => {
     const syncMatch = url.pathname.match(/^\/api\/user\/(\d+)\/sync$/);
     if (req.method === 'POST' && syncMatch) {
       const userId = parseInt(syncMatch[1]);
+      if (!checkRateLimit(userId)) {
+        res.statusCode = 429;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ 
+          success: false, 
+          error: 'Too many requests. Please try again later.' 
+        }));
+        return;
+      }
       
       // Читаем тело запроса
       let body = '';
