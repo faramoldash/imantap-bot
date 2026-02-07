@@ -3,6 +3,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import http from 'http';
 import dotenv from 'dotenv';
 import { connectDB, getDB, createIndexes } from './db.js';
+import { getPrayerTimesByCity, calculateReminderTime, updateUserPrayerTimes } from './prayerTimesService.js';
 import {
   getOrCreateUser,
   getUserById,
@@ -73,113 +74,177 @@ await connectDB();
 await createIndexes();
 
 // =====================================================
-// 🌙 РАМАЗАН УВЕДОМЛЕНИЯ - Сухур и Ифтар
+// 🌙 ПЕРСОНАЛИЗИРОВАННЫЕ РАМАЗАН УВЕДОМЛЕНИЯ
 // =====================================================
 
-const RAMADAN_TIMES = {
+const RAMADAN_MESSAGES = {
   suhur: {
-    hour: 5,
-    minute: 15, // За 10 минут до Фаджр (05:25)
-    name_kk: 'Ауыз бекітетін уақыт',
-    emoji: '🌙',
-    message: `🌙 *Ауыз бекітетін уақыт болды*
+    kk: `🌙 *Ауыз бекітетін уақыт жақындап қалды*
 
 Сәресіде айтылатын дұға:
 
 نَوَيْتُ أنْ أصُومَ صَوْمَ شَهْرُ رَمَضَانَ مِنَ الْفَجْرِ إِلَى الْمَغْرِبِ خَالِصًا لِلَّهِ تَعَالَى
 
-*Оқылуы:* «Нәуәйту ән асумә саумә шәһри Рамаданә минәл фәжри иләл мағриби халисан лилләһи таъалә».
+*Оқылуы:* «Нәуәйту ән асумә саумә шәһри Рамаданә минәл фәжри иләл мағриби халисан лилләһи таъалә»
 
-*Мағынасы:* «Таңертеннен кешке дейін Алланың ризалығы үшін Рамазан айының оразасын ұстауға ниет еттім».
+*Мағынасы:* «Таңертеннен кешке дейін Алланың ризалығы үшін Рамазан айының оразасын ұстауға ниет еттім»
 
-Алла Тағала оразаңызды қабыл етсін! 🤲`
+Алла Тағала оразаңызды қабыл етсін! 🤲
+
+📿 Таң намазы: {PRAYER_TIME}`,
+    ru: `🌙 *Время сухура приближается*
+
+Дуа при сухуре:
+
+نَوَيْتُ أنْ أصُومَ صَوْمَ شَهْرُ رَمَضَانَ مِنَ الْفَجْرِ إِلَى الْمَغْرِبِ خَالِصًا لِلَّهِ تَعَالَى
+
+*Транскрипция:* «Науэйту ан асума саума шахри Рамадана миналь-фаджри иляль-магриби халисан лиллахи таъаля»
+
+*Перевод:* «Я намереваюсь держать пост месяца Рамадан от рассвета до заката ради Аллаха»
+
+Пусть Аллах примет вашу оразу! 🤲
+
+📿 Намаз Фаджр: {PRAYER_TIME}`
   },
   iftar: {
-    hour: 18,
-    minute: 45, // Магриб намаз уақыты
-    name_kk: 'Ауызашар уақыты',
-    emoji: '🍽️',
-    message: `🍽️ *Ауызашар уақыты жақындап қалды*
+    kk: `🌆 *Ауыз ашатын уақыт жақындап қалды*
 
-Ауызашарда оқылатын дұға:
+Ауыз ашқанда айтылатын дұға:
 
-اللَّهُمَّ لَكَ صُمْتُ وَ بِكَ آمَنْتُ وَ عَلَيْكَ تَوَكَّلْتُ وَ على رِزْقِكَ اَفْطَرْتُ وَ صَوْمَ الْغَدِ مِنْ شَهْرِرَمَضانَ نَوَيْتُ فاغْفِرْ لِي ما قَدَّمْتُ وَ ما اَخَّرْتُ
+اللَّهُمَّ لَكَ صُمْتُ وَ بِكَ آمَنْتُ وَ عَلَيْكَ تَوَكَّلْتُ وَ عَلَى رِزْقِكَ أَفْطَرْتُ
 
-*Оқылуы:* «Аллаһуммә ләкә сумту уә бикә әәмәнту уә 'аләйкә тәуәккәлту уә 'ала ризқикә әфтарту уә саумәлғади мин шәһри Рамадана нәуәйту, фәғфирлии мәә қаддамту уә мәә аххарту».
+*Оқылуы:* «Аллаһумма ләкә сумту уә бикә әәмәнту уә 'аләйкә тәуәккәлту уә 'ала ризқикә әфтарту»
 
-*Мағынасы:* «Алла Тағалам! Сенің ризалығың үшін ораза ұстадым. Сенің берген ризығыңмен аузымды аштым. Саған иман етіп, саған тәуекел жасадым. Рамазан айының ертеңгі күніне де ауыз бекітуге ниет еттім. Сен менің өткен және келешек күнәларымды кешір».
+*Мағынасы:* «Алла Тағалам! Сенің ризалығың үшін ораза ұстадым. Саған иман етіп, саған тәуекел жасадым. Сенің берген ризығыңмен аузымды аштым»
 
-Ас-сәлем! 🤲`
+Оразаңыз қабыл болсын! 🤲
+Асыққан-ұмтылғандарға берекет берсін! 🍽️
+
+📿 Ақшам намазы: {PRAYER_TIME}`,
+    ru: `🌆 *Время ифтара приближается*
+
+Дуа при разговении:
+
+اللَّهُمَّ لَكَ صُمْتُ وَ بِكَ آمَنْتُ وَ عَلَيْكَ تَوَكَّلْتُ وَ عَلَى رِزْقِكَ أَفْطَرْتُ
+
+*Транскрипция:* «Аллахумма ляка сумту уа бика ааманту уа 'аляйка тауаккяльту уа 'аля ризкыка афтарту»
+
+*Перевод:* «О Аллах! Я постился ради Тебя, уверовал в Тебя, положился на Тебя и разговелся тем, что Ты даровал»
+
+Пусть Аллах примет вашу оразу! 🤲
+Приятного ифтара! 🍽️
+
+📿 Намаз Магриб: {PRAYER_TIME}`
   }
 };
 
-// Функция отправки Рамазан уведомлений
-async function sendRamadanReminder(reminderType, reminderData) {
+// Функция отправки персонализированных уведомлений
+async function sendPersonalizedRamadanReminder(type) {
   try {
     const db = getDB();
     const users = db.collection('users');
     
-    // Получаем активных пользователей (заходили за последние 3 дня)
-    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    
+    // Находим пользователей с временами намазов
     const activeUsers = await users.find({
-      createdAt: { $gte: threeDaysAgo }
+      'prayerTimes.fajr': { $exists: true },
+      paymentStatus: { $in: ['paid', 'demo'] }
     }).toArray();
     
-    console.log(`${reminderData.emoji} Отправка уведомлений: ${reminderData.name_kk}. Пользователей: ${activeUsers.length}`);
+    if (activeUsers.length === 0) return;
     
-    let successCount = 0;
-    let errorCount = 0;
+    let sentCount = 0;
     
     for (const user of activeUsers) {
       try {
-        await bot.sendMessage(
-          user.userId, 
-          reminderData.message,
-          {
+        const prayerTimes = user.prayerTimes;
+        const minutesBefore = 30; // За 30 минут
+        const lang = user.language || 'kk';
+        
+        let shouldSend = false;
+        let prayerTime = '';
+        
+        // Проверяем сухур (Fajr)
+        if (type === 'suhur' && prayerTimes.fajr) {
+          const reminderTime = calculateReminderTime(prayerTimes.fajr, minutesBefore);
+          if (reminderTime.hour === currentHour && reminderTime.minute === currentMinute) {
+            shouldSend = true;
+            prayerTime = prayerTimes.fajr;
+          }
+        }
+        
+        // Проверяем ифтар (Maghrib)
+        if (type === 'iftar' && prayerTimes.maghrib) {
+          const reminderTime = calculateReminderTime(prayerTimes.maghrib, minutesBefore);
+          if (reminderTime.hour === currentHour && reminderTime.minute === currentMinute) {
+            shouldSend = true;
+            prayerTime = prayerTimes.maghrib;
+          }
+        }
+        
+        if (shouldSend) {
+          const message = RAMADAN_MESSAGES[type][lang].replace('{PRAYER_TIME}', prayerTime);
+          
+          await bot.sendMessage(user.userId, message, {
             parse_mode: 'Markdown',
             reply_markup: {
               inline_keyboard: [[
                 { 
-                  text: '✅ Жасалды', 
-                  callback_data: `ramadan_${reminderType}_done` 
+                  text: lang === 'kk' ? '✅ Жасалды' : '✅ Готово', 
+                  callback_data: `ramadan_${type}_done` 
                 }
               ]]
             }
-          }
-        );
-        
-        successCount++;
-        
-        // Задержка 100ms между отправками
-        await new Promise(resolve => setTimeout(resolve, 100));
+          });
+          
+          sentCount++;
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
       } catch (error) {
-        errorCount++;
-        console.error(`Ошибка отправки ${user.userId}:`, error.message);
+        console.error(`❌ Ошибка отправки ${user.userId}:`, error.message);
       }
     }
     
-    console.log(`✅ Отправлено. Успешно: ${successCount}, Ошибок: ${errorCount}`);
+    if (sentCount > 0) {
+      console.log(`✅ ${type === 'suhur' ? '🌙 Сухур' : '🌆 Ифтар'} уведомления: ${sentCount} пользователей`);
+    }
   } catch (error) {
-    console.error('❌ Ошибка отправки уведомлений:', error);
+    console.error('❌ Ошибка уведомлений:', error);
   }
 }
 
-// Планируем уведомления
-console.log('⏰ Настройка расписания Рамазан уведомлений...');
+// ✅ Проверка каждую минуту
+console.log('⏰ Система персонализированных уведомлений запущена');
 
-Object.entries(RAMADAN_TIMES).forEach(([reminderType, reminderData]) => {
-  // Cron формат: минута час * * * (каждый день)
-  const cronExpression = `${reminderData.minute} ${reminderData.hour} * * *`;
+setInterval(async () => {
+  await sendPersonalizedRamadanReminder('suhur');
+  await sendPersonalizedRamadanReminder('iftar');
+}, 60 * 1000);
+
+// ✅ Обновляем времена намазов каждую ночь в 00:00
+schedule.scheduleJob('0 0 * * *', async () => {
+  console.log('🔄 Обновление времен намазов...');
   
-  schedule.scheduleJob(cronExpression, () => {
-    console.log(`⏰ Время отправки: ${reminderData.name_kk}`);
-    sendRamadanReminder(reminderType, reminderData);
-  });
+  const db = getDB();
+  const users = db.collection('users');
+  const allUsers = await users.find({ 
+    'location.city': { $exists: true }
+  }).toArray();
   
-  console.log(`   ✓ ${reminderData.emoji} ${reminderData.name_kk}: ${String(reminderData.hour).padStart(2, '0')}:${String(reminderData.minute).padStart(2, '0')}`);
+  let updated = 0;
+  for (const user of allUsers) {
+    const success = await updateUserPrayerTimes(user.userId);
+    if (success) updated++;
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  
+  console.log(`✅ Обновлено: ${updated}/${allUsers.length} пользователей`);
 });
 
-console.log('✅ Расписание Рамазан уведомлений настроено!\n');
+console.log('✅ Автообновление времен настроено (00:00)\n');
 
 // =====================================================
 // 🎯 ОБРАБОТКА ВСЕХ CALLBACK КНОПОК
@@ -537,22 +602,20 @@ bot.on('location', async (msg) => {
   const userId = msg.from.id;
   const chatId = msg.chat.id;
   const state = getState(userId);
-
+  
   if (state === 'WAITING_LOCATION') {
     const { latitude, longitude } = msg.location;
-
-    // Простое определение города (можно улучшить с API)
-    let city = 'Астана';
+    
+    // Получаем город через Reverse Geocoding (можно добавить позже)
+    let city = 'Almaty';
     
     await updateUserOnboarding(userId, {
-      location: {
-        city,
-        country: 'Қазақстан',
-        latitude,
-        longitude
-      }
+      location: { city, country: 'Kazakhstan', latitude, longitude }
     });
-
+    
+    // ✅ ПРАВИЛЬНО - используем импортированную функцию:
+    await updateUserPrayerTimes(userId);
+    
     await requestPromoCode(chatId, userId);
   }
 });
@@ -571,27 +634,23 @@ bot.on('message', async (msg) => {
 
   // Выбор города вручную
   if (state === 'WAITING_LOCATION') {
-    let city = text.replace('🌍 ', '').trim();
-
-    if (city === 'Басқа қала') {
-      await bot.sendMessage(
-        chatId,
-        'Қалаңыздың атауын жазыңыз:',
-        { reply_markup: { remove_keyboard: true } }
-      );
+    let city = text.replace(/[🌍📍]/g, '').trim();
+    
+    if (!city) {
+      await bot.sendMessage(chatId, 'Қала атауын жазыңыз:', {
+        reply_markup: { remove_keyboard: true }
+      });
       setState(userId, 'WAITING_CITY_NAME');
       return;
     }
-
+    
     await updateUserOnboarding(userId, {
-      location: {
-        city,
-        country: 'Қазақстан',
-        latitude: null,
-        longitude: null
-      }
+      location: { city, country: 'Kazakhstan', latitude: null, longitude: null }
     });
-
+    
+    // ✅ ДОБАВЬТЕ обновление времен намазов
+    await updateUserPrayerTimes(userId);
+    
     await requestPromoCode(chatId, userId);
     return;
   }
@@ -599,16 +658,13 @@ bot.on('message', async (msg) => {
   // Ввод названия города
   if (state === 'WAITING_CITY_NAME') {
     const city = text.trim();
-
     await updateUserOnboarding(userId, {
-      location: {
-        city,
-        country: 'Қазақстан',
-        latitude: null,
-        longitude: null
-      }
+      location: { city, country: 'Kazakhstan', latitude: null, longitude: null }
     });
-
+    
+    // ✅ ДОБАВЬТЕ обновление времен намазов
+    await updateUserPrayerTimes(userId);
+    
     await requestPromoCode(chatId, userId);
     return;
   }
