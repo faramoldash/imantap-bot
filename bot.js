@@ -19,7 +19,8 @@ import {
   approvePayment,
   rejectPayment,
   getUserAccess,
-  getPendingPayments
+  getPendingPayments,
+  addUserXP
 } from './userService.js';
 import {
   isAdmin,
@@ -560,13 +561,19 @@ bot.on('callback_query', async (query) => {
         const inviter = await getUserByPromoCode(user.referredBy);
         if (inviter) {
           await incrementReferralCount(inviter.userId);
+          
+          // ✅ НАЧИСЛЯЕМ +400 XP ПРИГЛАСИВШЕМУ
+          await addUserXP(inviter.userId, 400, `Реферал: пользователь ${targetUserId} купил доступ`);
+          
           console.log(`🎉 Реферал засчитан для промокода: ${user.referredBy}`);
           
           await bot.sendMessage(
             inviter.userId,
-            `🎁 Жаңа реферал!\n\n` +
-            `Сіздің досыңыз төлем жасады.\n` +
-            `Барлық рефералдар: ${inviter.invitedCount + 1} 🔥`
+            `🎁 *Жаңа реферал!*\n\n` +
+            `Сіздің досыңыз төлем жасады!\n` +
+            `🎯 Сіз алдыңыз: +400 XP\n\n` +
+            `Барлық рефералдар: ${inviter.invitedCount + 1} 🔥`,
+            { parse_mode: 'Markdown' }
           );
         }
       }
@@ -1518,21 +1525,40 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
 
       // Проверяем существует ли такой промокод
       const inviter = await getUserByPromoCode(referralCode);
-      
+
       if (inviter) {
         // Сохраняем реферал
         await updateUserOnboarding(userId, {
           referredBy: referralCode
         });
         
+        // ✅ НАЧИСЛЯЕМ +100 XP ОБОИМ
+        await addUserXP(userId, 100, 'Регистрация по реферальной ссылке');
+        await addUserXP(inviter.userId, 100, `Реферал: пользователь ${userId} зарегистрировался`);
+        
         bot.sendMessage(
           chatId,
           `🎁 *Сізде реферал сілтемесі бар!*\n\n` +
           `Досыңыз сізді шақырды.\n` +
           `Сіз -500₸ жеңілдік аласыз!\n\n` +
+          `🎯 Сіз алдыңыз: +100 XP\n` +
+          `🎯 Досыңыз алды: +100 XP\n\n` +
           `Баптауды бастайық! 🚀`,
           { parse_mode: 'Markdown' }
         );
+        
+        // Уведомляем пригласившего
+        try {
+          await bot.sendMessage(
+            inviter.userId,
+            `🎉 *Жаңа реферал!*\n\n` +
+            `Сіздің промокодыңыз бойынша тіркелді!\n` +
+            `🎯 Сіз алдыңыз: +100 XP\n\n` +
+            `Барлық рефералдар: ${inviter.invitedCount + 1} 🔥`
+          );
+        } catch (e) {
+          // Пользователь мог заблокировать бота
+        }
       }
     }
 

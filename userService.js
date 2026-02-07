@@ -493,6 +493,35 @@ async function getUserAccess(userId) {
   };
 }
 
+/**
+ * Добавить XP пользователю
+ */
+async function addUserXP(userId, amount, reason = '') {
+  try {
+    const db = getDB();
+    const users = db.collection('users');
+    
+    const result = await users.updateOne(
+      { userId: parseInt(userId) },
+      { 
+        $inc: { xp: amount },
+        $set: { updatedAt: new Date() }
+      }
+    );
+    
+    if (result.modifiedCount > 0) {
+      console.log(`✅ Добавлено ${amount} XP для userId ${userId}. Причина: ${reason}`);
+      return true;
+    }
+    
+    console.log(`⚠️ Не удалось добавить XP для userId ${userId}`);
+    return false;
+  } catch (error) {
+    console.error('❌ addUserXP ошибка:', error);
+    throw error;
+  }
+}
+
 // =====================================================
 // ЭКСПОРТЫ (ТОЛЬКО ОДИН РАЗ!)
 // =====================================================
@@ -512,5 +541,6 @@ export {
   rejectPayment,
   getUserAccess,
   getPendingPayments,
-  checkDemoExpiration
+  checkDemoExpiration,
+  addUserXP
 };
