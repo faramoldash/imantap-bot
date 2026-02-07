@@ -152,26 +152,51 @@ async function updateUserProgress(userId, progressData) {
   try {
     const db = getDB();
     const usersCollection = db.collection('users');
-
+    
+    // ✅ Создаем объект только с теми полями, которые пришли
+    const updateFields = {
+      updatedAt: new Date()
+    };
+    
+    // ✅ Добавляем только те поля, которые есть в progressData
+    if (progressData.name !== undefined) updateFields.name = progressData.name;
+    if (progressData.username !== undefined) updateFields.username = progressData.username;
+    if (progressData.photoUrl !== undefined) updateFields.photoUrl = progressData.photoUrl;
+    if (progressData.registrationDate !== undefined) updateFields.registrationDate = progressData.registrationDate;
+    if (progressData.progress !== undefined) updateFields.progress = progressData.progress;
+    if (progressData.preparationProgress !== undefined) updateFields.preparationProgress = progressData.preparationProgress;
+    if (progressData.basicProgress !== undefined) updateFields.basicProgress = progressData.basicProgress;  // ✅ ДОБАВЛЕНО!
+    if (progressData.memorizedNames !== undefined) updateFields.memorizedNames = progressData.memorizedNames;
+    if (progressData.completedJuzs !== undefined) updateFields.completedJuzs = progressData.completedJuzs;
+    if (progressData.quranKhatams !== undefined) updateFields.quranKhatams = progressData.quranKhatams;
+    if (progressData.completedTasks !== undefined) updateFields.completedTasks = progressData.completedTasks;
+    if (progressData.deletedPredefinedTasks !== undefined) updateFields.deletedPredefinedTasks = progressData.deletedPredefinedTasks;
+    if (progressData.customTasks !== undefined) updateFields.customTasks = progressData.customTasks;
+    if (progressData.quranGoal !== undefined) updateFields.quranGoal = progressData.quranGoal;
+    if (progressData.dailyQuranGoal !== undefined) updateFields.dailyQuranGoal = progressData.dailyQuranGoal;
+    if (progressData.dailyCharityGoal !== undefined) updateFields.dailyCharityGoal = progressData.dailyCharityGoal;
+    if (progressData.language !== undefined) updateFields.language = progressData.language;
+    if (progressData.xp !== undefined) updateFields.xp = progressData.xp;
+    if (progressData.hasRedeemedReferral !== undefined) updateFields.hasRedeemedReferral = progressData.hasRedeemedReferral;
+    if (progressData.unlockedBadges !== undefined) updateFields.unlockedBadges = progressData.unlockedBadges;
+    if (progressData.currentStreak !== undefined) updateFields.currentStreak = progressData.currentStreak;
+    if (progressData.longestStreak !== undefined) updateFields.longestStreak = progressData.longestStreak;
+    if (progressData.lastActiveDate !== undefined) updateFields.lastActiveDate = progressData.lastActiveDate;
+    
     const result = await usersCollection.updateOne(
       { userId: parseInt(userId) },
-      {
-        $set: {
-          ...progressData,
-          updatedAt: new Date()
-        }
-      }
+      { $set: updateFields }
     );
-
+    
     if (result.modifiedCount > 0) {
-      console.log(`✅ Прогресс обновлён для пользователя: ${userId}`);
+      console.log('✅ Прогресс обновлен для userId:', userId);
       return true;
     }
-
-    console.log(`⚠️ Пользователь не найден: ${userId}`);
+    
+    console.log('⚠️ Прогресс не изменился для userId:', userId);
     return false;
   } catch (error) {
-    console.error('❌ Ошибка в updateUserProgress:', error);
+    console.error('❌ updateUserProgress ошибка:', error);
     throw error;
   }
 }
@@ -183,13 +208,10 @@ async function getUserFullData(userId) {
   try {
     const db = getDB();
     const usersCollection = db.collection('users');
-
     const user = await usersCollection.findOne({ userId: parseInt(userId) });
     
-    if (!user) {
-      return null;
-    }
-
+    if (!user) return null;
+    
     return {
       userId: user.userId,
       username: user.username,
@@ -200,6 +222,8 @@ async function getUserFullData(userId) {
       startDate: user.startDate,
       registrationDate: user.registrationDate,
       progress: user.progress || {},
+      preparationProgress: user.preparationProgress || {},  // ✅ ДОБАВЬТЕ
+      basicProgress: user.basicProgress || {},  // ✅ ДОБАВЬТЕ
       memorizedNames: user.memorizedNames || [],
       completedJuzs: user.completedJuzs || [],
       quranKhatams: user.quranKhatams || 0,
@@ -214,10 +238,13 @@ async function getUserFullData(userId) {
       referralCount: user.invitedCount,
       myPromoCode: user.promoCode,
       hasRedeemedReferral: user.hasRedeemedReferral || false,
-      unlockedBadges: user.unlockedBadges || []
+      unlockedBadges: user.unlockedBadges || [],
+      currentStreak: user.currentStreak || 0,  // ✅ ДОБАВЬТЕ
+      longestStreak: user.longestStreak || 0,  // ✅ ДОБАВЬТЕ
+      lastActiveDate: user.lastActiveDate || ''  // ✅ ДОБАВЬТЕ
     };
   } catch (error) {
-    console.error('❌ Ошибка в getUserFullData:', error);
+    console.error('❌ getUserFullData ошибка:', error);
     throw error;
   }
 }
