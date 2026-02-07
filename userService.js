@@ -55,6 +55,8 @@ async function getOrCreateUser(userId, username = null) {
       
       // Прогресс (как было)
       progress: {},
+      preparationProgress: {},
+      basicProgress: {},
       memorizedNames: [],
       completedJuzs: [],
       quranKhatams: 0,
