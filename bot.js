@@ -886,10 +886,16 @@ bot.on('location', async (msg) => {
       // ✅ Обновляем времена намазов
       await updateUserPrayerTimes(userId);
       
-      // 📍 СМЕНА ГОРОДА (через геолокацию)
+      // ✅ Если это смена города - показываем результат и завершаем
       if (state === 'CHANGING_CITY') {
-        if (text === '❌ Болдырмау') {
-          await bot.sendMessage(chatId, 'Өзгертілді ✅', {
+        const user = await getUserById(userId);
+        await bot.sendMessage(chatId,
+          `✅ Қала өзгертілді: *${city}, ${country}*\n\n` +
+          `🌍 Уақыт белдеуі: ${timezone}\n` +
+          `🌅 Таң намазы: ${user.prayerTimes?.fajr || 'анықталмады'}\n` +
+          `🌆 Ақшам намазы: ${user.prayerTimes?.maghrib || 'анықталмады'}`,
+          {
+            parse_mode: 'Markdown',
             reply_markup: {
               keyboard: [
                 [{
@@ -901,28 +907,13 @@ bot.on('location', async (msg) => {
               ],
               resize_keyboard: true
             }
-          });
-          clearSession(userId);
-          return;
-        }
-        
-        // Если не кнопка отмены - просим геолокацию
-        await bot.sendMessage(chatId, 
-          '📍 Геолокацияны жіберу керек!\n\nТөмендегі батырманы басыңыз:',
-          {
-            reply_markup: {
-              keyboard: [
-                [{ text: '📍 Геолокацияны жіберу', request_location: true }],
-                ['❌ Болдырмау']
-              ],
-              resize_keyboard: true
-            }
           }
         );
-        return;
+        clearSession(userId);
+        return;  // ✅ Завершаем, НЕ вызываем requestPromoCode
       }
       
-      // Если это онбординг - продолжаем
+      // ✅ Если это онбординг - продолжаем к промокоду
       await requestPromoCode(chatId, userId);
       
     } catch (error) {
