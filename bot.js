@@ -2172,20 +2172,21 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // ✅ API: Глобальный лидерборд
+    // ✅ API: Глобальный лидерборд (ИСПРАВЛЕННЫЙ)
     if (url.pathname === '/api/leaderboard/global') {
       try {
         const limit = parseInt(url.searchParams.get('limit') || '50');
         const offset = parseInt(url.searchParams.get('offset') || '0');
         
-        const leaderboard = await getGlobalLeaderboard(limit);
-        const sliced = leaderboard.slice(offset, offset + limit);
+        const allLeaderboard = await getGlobalLeaderboard(limit + offset);
+        const sliced = allLeaderboard.slice(offset, offset + limit);
         
         res.statusCode = 200;
         res.end(JSON.stringify({ 
           success: true, 
           data: sliced,
-          total: leaderboard.length 
+          total: allLeaderboard.length,
+          hasMore: (offset + limit) < allLeaderboard.length  // ✅ ДОБАВЛЕНО
         }));
         return;
       } catch (error) {
@@ -2196,17 +2197,46 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // ✅ API: Лидерборд по странам (пока заглушка)
-    if (url.pathname === '/api/leaderboard/countries') {
+    // ✅ API: Лидерборд друзей
+    if (url.pathname.match(/^\/api\/leaderboard\/friends\/\d+$/)) {
       try {
-        // Заглушка - можно потом реализовать
+        const userId = parseInt(url.pathname.split('/')[4]);
+        const limit = parseInt(url.searchParams.get('limit') || '20');
+        
+        if (!userId) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ success: false, error: 'userId required' }));
+          return;
+        }
+        
+        const friends = await getFriendsLeaderboard(userId, limit);
+        
         res.statusCode = 200;
         res.end(JSON.stringify({ 
           success: true, 
-          data: [
-            { country: 'Kazakhstan', count: 10, totalXP: 5000 },
-            { country: 'Russia', count: 5, totalXP: 3000 }
-          ]
+          data: friends,
+          total: friends.length,
+          hasMore: false  // ✅ Для friends всегда false (нет пагинации)
+        }));
+        return;
+      } catch (error) {
+        console.error('❌ API Error /leaderboard/friends:', error);
+        res.statusCode = 500;
+        res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
+        return;
+      }
+    }
+
+    // ✅ API: Лидерборд по странам (ИСПРАВЛЕННЫЙ)
+    if (url.pathname === '/api/leaderboard/countries') {
+      try {
+        // Пока заглушка - можно реализовать позже
+        res.statusCode = 200;
+        res.end(JSON.stringify({ 
+          success: true, 
+          data: [],  // ✅ ПУСТОЙ массив вместо объектов
+          total: 0,
+          hasMore: false
         }));
         return;
       } catch (error) {
