@@ -672,6 +672,102 @@ async function checkAndUnlockBadges(userId) {
   }
 }
 
+// Получить список всех стран пользователей
+export async function getCountries() {
+  try {
+    const db = getDB();
+    const users = db.collection('users');
+    
+    const countries = await users.distinct('location.country', {
+      'location.country': { $ne: null },
+      'location.country': { $ne: '' },
+      onboardingCompleted: true
+    });
+    
+    return countries.filter(c => c && c !== 'Unknown').sort();
+  } catch (error) {
+    console.error('❌ Ошибка получения стран:', error);
+    return [];
+  }
+}
+
+// Получить список городов в стране
+export async function getCities(country) {
+  try {
+    const db = getDB();
+    const users = db.collection('users');
+    
+    const cities = await users.distinct('location.city', {
+      'location.country': country,
+      'location.city': { $ne: null },
+      'location.city': { $ne: '' },
+      onboardingCompleted: true
+    });
+    
+    return cities.filter(c => c && c !== 'Unknown').sort();
+  } catch (error) {
+    console.error('❌ Ошибка получения городов:', error);
+    return [];
+  }
+}
+
+// Лидерборд с фильтрами по стране/городу
+export async function getFilteredLeaderboard(options = {}) {
+  try {
+    const { limit = 50, offset = 0, country = null, city = null } = options;
+    const db = getDB();
+    const users = db.collection('users');
+    
+    // Базовый фильтр
+    const filter = {
+      onboardingCompleted: true,
+      xp: { $gt: 0 }
+    };
+    
+    // Фильтр по стране
+    if (country) {
+      filter['location.country'] = country;
+    }
+    
+    // Фильтр по городу
+    if (city) {
+      filter['location.city'] = city;
+    }
+    
+    // Получаем лидерборд
+    const leaderboard = await users
+      .find(filter)
+      .sort({ xp: -1 })
+      .skip(offset)
+      .limit(limit)
+      .project({
+        userId: 1,
+        username: 1,
+        name: 1,
+        photoUrl: 1,
+        xp: 1,
+        currentStreak: 1,
+        unlockedBadges: 1,
+        invitedCount: 1,
+        'location.city': 1,
+        'location.country': 1
+      })
+      .toArray();
+    
+    // Считаем общее количество
+    const total = await users.countDocuments(filter);
+    
+    return {
+      data: leaderboard,
+      total,
+      hasMore: offset + limit < total
+    };
+  } catch (error) {
+    console.error('❌ Ошибка получения лидерборда с фильтрами:', error);
+    throw error;
+  }
+}
+
 // =====================================================
 // ЭКСПОРТЫ (ТОЛЬКО ОДИН РАЗ!)
 // =====================================================
@@ -695,5 +791,8 @@ export {
   addUserXP,
   getGlobalLeaderboard,
   getUserRank,
-  getFriendsLeaderboard
+  getFriendsLeaderboard,
+  getCountries,
+  getCities,
+  getFilteredLeaderboard
 };
