@@ -2195,7 +2195,7 @@ const server = http.createServer(async (req, res) => {
 
     // ✅ API: Получить полные данные пользователя
     if (url.pathname.match(/^\/api\/user\/\d+\/full$/)) {
-      const userId = parseInt(url.pathname.split('/')[4]);
+      const userId = parseInt(url.pathname.split('/')[3]);
       
       if (!userId) {
         res.statusCode = 400;
