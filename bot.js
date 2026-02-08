@@ -2062,6 +2062,57 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // API: Проверка доступа пользователя
+    if (url.pathname.match(/^\/api\/user\/\d+\/access$/)) {
+      const userId = parseInt(url.pathname.split('/')[3]);
+      
+      if (!userId) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ success: false, error: 'Invalid userId' }));
+        return;
+      }
+
+      try {
+        const access = await getUserAccess(userId);
+        res.statusCode = 200;
+        res.end(JSON.stringify({
+          success: true,
+          hasAccess: access.hasAccess,
+          paymentStatus: access.paymentStatus,
+          demoExpires: access.demoExpires
+        }));
+        return;
+      } catch (error) {
+        console.error('❌ API Error /access:', error);
+        res.statusCode = 500;
+        res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
+        return;
+      }
+    }
+
+    // API: Sync данных пользователя
+    if (url.pathname.match(/^\/api\/user\/\d+\/sync$/) && req.method === 'POST') {
+      const userId = parseInt(url.pathname.split('/')[3]);
+      
+      if (!userId) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ success: false, error: 'Invalid userId' }));
+        return;
+      }
+
+      try {
+        const userData = await getUserFullData(userId);
+        res.statusCode = 200;
+        res.end(JSON.stringify({ success: true, data: userData }));
+        return;
+      } catch (error) {
+        console.error('❌ API Error /sync:', error);
+        res.statusCode = 500;
+        res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
+        return;
+      }
+    }
+
     // API: Получить данные пользователя
     if (url.pathname === '/api/user') {
       const userId = parseInt(url.searchParams.get('userId'));
