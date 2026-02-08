@@ -2049,3 +2049,49 @@ const server = http.createServer(async (req, res) => {
     res.end();
     return;
   }
+
+  // Устанавливаем Content-Type для всех ответов
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+
+  try {
+    // Health check
+    if (url.pathname === '/health') {
+      res.statusCode = 200;
+      res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
+      return;
+    }
+
+    // API: Получить данные пользователя
+    if (url.pathname === '/api/user') {
+      const userId = parseInt(url.searchParams.get('userId'));
+      if (!userId) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ success: false, error: 'userId required' }));
+        return;
+      }
+
+      const userData = await getUserFullData(userId);
+      res.statusCode = 200;
+      res.end(JSON.stringify({ success: true, data: userData }));
+      return;
+    }
+
+    // 404 для всех остальных путей
+    res.statusCode = 404;
+    res.end(JSON.stringify({ success: false, error: 'Not Found' }));
+
+  } catch (error) {
+    console.error('❌ API Error:', error);
+    res.statusCode = 500;
+    res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
+  }
+});
+
+// Запуск сервера
+server.listen(PORT, () => {
+  console.log(`✅ HTTP API Server running on port ${PORT}`);
+  console.log(`✅ Bot started successfully`);
+  console.log(`✅ Mini App URL: ${MINI_APP_URL}`);
+});
+
+console.log('🚀 ImanTap Bot запускается...');
