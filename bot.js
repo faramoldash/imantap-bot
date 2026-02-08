@@ -1999,59 +1999,41 @@ bot.onText(/\/checkdemo/, async (msg) => {
 });
 
 // ===== HTTP API СЕРВЕР =====
-
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://localhost:${PORT}`);
   
-  // ✅ УСИЛЕННАЯ CORS ПОЛИТИКА
-  const allowedOrigins = process.env.NODE_ENV === 'production' 
-    ? [
-        'https://imantap-production-6776.up.railway.app',
-        'https://web.telegram.org',
-        'https://z.t.me'
-      ]
-    : [
-        'https://imantap-production-6776.up.railway.app',
-        'https://web.telegram.org',
-        'http://localhost:3000',
-        'http://localhost:5173'
-      ];
-
-  const origin = req.headers.origin;
-
-  // ✅ Проверяем origin
-    // ✅ Если origin неизвестный - БЛОКИРУЕМ ВСЕ запросы (критично для безопасности)
-  if (!origin || !allowedOrigins.includes(origin)) {
-    // OPTIONS всегда пропускаем (для CORS preflight)
-    if (req.method === 'OPTIONS') {
-      res.statusCode = 200;
-      res.end();
-      return;
-    }
-    
-    // ВСЕ остальные запросы - блокируем
-    res.statusCode = 403;
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.end(JSON.stringify({ 
-      success: false, 
-      error: 'Forbidden: Invalid or missing origin' 
-    }));
-    return;
+  // ✅ РАСШИРЕННЫЕ CORS (включая Telegram origins)
+  const allowedOrigins = [
+    'https://imantap-production-6776.up.railway.app',
+    'https://web.telegram.org',
+    'https://z.t.me',
+    'https://telegram.org'
+  ];
+  
+  // Разрешаем в dev режиме
+  if (process.env.NODE_ENV !== 'production') {
+    allowedOrigins.push('http://localhost:3000', 'http://localhost:5173');
   }
-
-  // ✅ Если origin валидный - устанавливаем CORS заголовки
-  res.setHeader('Access-Control-Allow-Origin', origin);
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  
+  const origin = req.headers.origin || req.headers.referer;
+  
+  // ✅ ВАЖНО: Для Telegram WebApp разрешаем запросы БЕЗ origin
+  const isTelegramRequest = !origin || origin.includes('t.me') || origin.includes('telegram');
+  
+  if (isTelegramRequest || allowedOrigins.some(allowed => origin?.includes(allowed))) {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
   
   // OPTIONS preflight
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     res.statusCode = 200;
     res.end();
     return;
   }
-
+  
   // Устанавливаем Content-Type для всех ответов
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
 
@@ -2088,6 +2070,37 @@ const server = http.createServer(async (req, res) => {
         console.error('❌ API Error /check-access:', error);
         res.statusCode = 500;
         res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
+        return;
+      }
+    }
+
+    // ✅ API: /api/check-access (для фронтенда miniapp)
+    if (url.pathname === '/api/check-access') {
+      const userId = parseInt(url.searchParams.get('userId'));
+      
+      if (!userId) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ success: false, error: 'userId required' }));
+        return;
+      }
+      
+      try {
+        const access = await getUserAccess(userId);
+        console.log(`✅ API /check-access: userId=${userId}, hasAccess=${access.hasAccess}, status=${access.paymentStatus}`);
+        
+        res.statusCode = 200;
+        res.end(JSON.stringify({
+          success: true,
+          hasAccess: access.hasAccess,
+          paymentStatus: access.paymentStatus,
+          demoExpires: access.demoExpires,
+          reason: access.reason
+        }));
+        return;
+      } catch (error) {
+        console.error('❌ API Error /check-access:', error);
+        res.statusCode = 500;
+        res.end(JSON.stringify({ success: false, error: error.message }));
         return;
       }
     }
