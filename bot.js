@@ -27,7 +27,6 @@ import {
   getGlobalLeaderboard,
   getUserRank,
   getFriendsLeaderboard,
-  getCountriesLeaderboard,
   getCountries,
   getCities,
   getFilteredLeaderboard
