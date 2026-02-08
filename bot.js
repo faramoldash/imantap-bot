@@ -2007,7 +2007,8 @@ const server = http.createServer(async (req, res) => {
   const allowedOrigins = process.env.NODE_ENV === 'production' 
     ? [
         'https://imantap-production-6776.up.railway.app',
-        'https://web.telegram.org'
+        'https://web.telegram.org',
+        'https://z.t.me'
       ]
     : [
         'https://imantap-production-6776.up.railway.app',
@@ -2060,6 +2061,35 @@ const server = http.createServer(async (req, res) => {
       res.statusCode = 200;
       res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
       return;
+    }
+
+    // API: Проверка доступа (новый endpoint для miniapp)
+    if (url.pathname === '/api/check-access') {
+      const userId = parseInt(url.searchParams.get('userId'));
+      
+      if (!userId) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ success: false, error: 'userId required' }));
+        return;
+      }
+      
+      try {
+        const access = await getUserAccess(userId);
+        res.statusCode = 200;
+        res.end(JSON.stringify({
+          success: true,
+          hasAccess: access.hasAccess,
+          paymentStatus: access.paymentStatus,
+          demoExpires: access.demoExpires,
+          reason: access.reason
+        }));
+        return;
+      } catch (error) {
+        console.error('❌ API Error /check-access:', error);
+        res.statusCode = 500;
+        res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
+        return;
+      }
     }
 
     // API: Проверка доступа пользователя
