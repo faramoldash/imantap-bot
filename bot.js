@@ -48,6 +48,31 @@ import {
 } from './sessionManager.js';
 import schedule from 'node-schedule';
 
+// Экранирование специальных символов для Markdown
+function escapeMarkdown(text) {
+  if (!text) return '';
+  return text.toString()
+    .replace(/\_/g, '\\_')
+    .replace(/\*/g, '\\*')
+    .replace(/\[/g, '\\[')
+    .replace(/\]/g, '\\]')
+    .replace(/\(/g, '\\(')
+    .replace(/\)/g, '\\)')
+    .replace(/\~/g, '\\~')
+    .replace(/\`/g, '\\`')
+    .replace(/\>/g, '\\>')
+    .replace(/\#/g, '\\#')
+    .replace(/\+/g, '\\+')
+    .replace(/\-/g, '\\-')
+    .replace(/\=/g, '\\=')
+    .replace(/\|/g, '\\|')
+    .replace(/\{/g, '\\{')
+    .replace(/\}/g, '\\}')
+    .replace(/\./g, '\\.')
+    .replace(/\!/g, '\\!');
+}
+
+
 // ✅ Функция определения города по координатам с User-Agent
 async function getCityFromCoordinates(latitude, longitude) {
   try {
@@ -988,7 +1013,6 @@ bot.on('message', async (msg) => {
         `🎁 Промокод: ${user.promoCode}\n` +
         `👥 Шақырылғандар: ${user.invitedCount}\n` +
         `📅 Тіркелген күн: ${user.createdAt.toLocaleDateString('kk-KZ')}`,
-        { parse_mode: 'Markdown' }
       );
     } catch (error) {
       console.error('stats ошибка:', error);
@@ -1368,30 +1392,27 @@ async function notifyAdminsNewPayment(userId, fileId, fileType) {
     const adminIds = await getAdmins();
     
     const discountText = user.hasDiscount 
-      ? `💰 Сумма: ~~2490₸~~ → *${user.paidAmount}₸* (скидка!)` 
-      : `💰 Сумма: *${user.paidAmount}₸*`;
-
-    const caption =
-      `🔔 *Новый платёж на проверке*\n\n` +
-      `👤 User ID: \`${userId}\`\n` +
-      `👤 Имя: ${user.username || 'н/д'}\n` +
-      `📱 Телефон: ${user.phoneNumber || 'н/д'}\n` +
-      `📍 Город: ${user.location?.city || 'не указан'}\n` +
+      ? `💰 Сумма: 2490₸ → ${user.paidAmount}₸ (промокод применён!)` 
+      : `💰 Сумма: ${user.paidAmount}₸`;
+    
+    // Экранируем все данные пользователя
+    const caption = `🔔 Новый платёж на проверке!\n\n` +
+      `👤 User ID: ${userId}\n` +
+      `📱 Username: ${escapeMarkdown(user.username || '—')}\n` +
+      `📞 Телефон: ${escapeMarkdown(user.phoneNumber)}\n` +
+      `📍 Город: ${escapeMarkdown(user.location?.city)}\n` +
       `${discountText}\n` +
-      `🎟️ Промокод: ${user.usedPromoCode || user.referredBy || 'нет'}\n` +
-      `⏰ Отправлено: ${new Date().toLocaleString('ru-RU')}\n\n` +
-      `Подтвердить оплату?`;
-
+      `🎟️ Промокод: ${escapeMarkdown(user.usedPromoCode || '—')}\n` +
+      `👥 Реферал: ${escapeMarkdown(user.referredBy || '—')}\n` +
+      `📅 ${new Date().toLocaleString('ru-RU')}`;
+    
     const keyboard = {
-      inline_keyboard: [
-        [
-          { text: '✅ Подтвердить', callback_data: `approve_${userId}` },
-          { text: '❌ Отклонить', callback_data: `reject_${userId}` }
-        ]
-      ]
+      inline_keyboard: [[
+        { text: '✅ Одобрить', callback_data: `approve_${userId}` },
+        { text: '❌ Отклонить', callback_data: `reject_${userId}` }
+      ]]
     };
-
-    // Отправляем всем админам/менеджерам
+    
     for (const adminId of adminIds) {
       try {
         if (fileType === 'photo') {
@@ -1401,21 +1422,19 @@ async function notifyAdminsNewPayment(userId, fileId, fileType) {
             reply_markup: keyboard
           });
         } else {
-          // Для документов отправляем файл
           await bot.sendDocument(adminId, fileId, {
             caption,
             parse_mode: 'Markdown',
             reply_markup: keyboard
           });
         }
-        
-        console.log(`📤 Уведомление отправлено админу ${adminId}`);
+        console.log(`✅ Уведомление отправлено админу ${adminId}`);
       } catch (error) {
         console.error(`❌ Не удалось отправить админу ${adminId}:`, error.message);
       }
     }
   } catch (error) {
-    console.error('❌ Ошибка уведомления админов:', error);
+    console.error('❌ Ошибка при уведомлении админов:', error);
   }
 }
 
