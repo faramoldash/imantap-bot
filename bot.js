@@ -4,6 +4,8 @@ import http from 'http';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
+import geoTz from 'geo-tz';
+import NodeGeocoder from 'node-geocoder';
 import { connectDB, getDB, createIndexes } from './db.js';
 import { getPrayerTimesByCity, calculateReminderTime, updateUserPrayerTimes } from './prayerTimesService.js';
 import {
@@ -43,6 +45,13 @@ import {
   clearSession
 } from './sessionManager.js';
 import schedule from 'node-schedule';
+
+// Настройка geocoder
+const geocoder = NodeGeocoder({
+  provider: 'openstreetmap',
+  httpAdapter: 'https',
+  formatter: null
+});
 
 // ✅ Простая защита от DDOS
 const requestCounts = new Map();
@@ -414,23 +423,24 @@ bot.on('callback_query', async (query) => {
     return; // Важно! Выходим после обработки
   }
 
-  // ⚙️ НАСТРОЙКИ - Смена города
+  // ⚙️ НАСТРОЙКИ - Смена города (ТОЛЬКО через геолокацию)
   if (data === 'change_city') {
     await bot.answerCallbackQuery(query.id);
-    await bot.sendMessage(chatId, '📍 Жаңа қаланы жазыңыз:\n\nМысалы: Астана, Алматы, Шымкент, Ташкент', {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        keyboard: [
-          ['Астана', 'Алматы'],
-          ['Шымкент', 'Ақтөбе'],
-          ['Қарағанды', 'Тараз'],
-          ['Атырау', 'Ақтау'],
-          ['❌ Болдырмау']
-        ],
-        resize_keyboard: true,
-        one_time_keyboard: true
+    await bot.sendMessage(chatId, 
+      '📍 *Жаңа геолокацияны жіберіңіз*\n\n' +
+      'Дәл уақыттарды анықтау үшін геолокациямен бөлісіңіз.',
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          keyboard: [
+            [{ text: '📍 Геолокацияны жіберу', request_location: true }],
+            ['❌ Болдырмау']
+          ],
+          resize_keyboard: true,
+          one_time_keyboard: true
+        }
       }
-    });
+    );
     setState(userId, 'CHANGING_CITY');
     return;
   }
@@ -710,21 +720,20 @@ async function requestLocation(chatId, userId) {
   await bot.sendMessage(
     chatId,
     `✅ Керемет!\n\n` +
-    `📍 *2/3-қадам: Қалаңыз*\n\n` +
-    `Намаз уақыттарын дәл көрсету үшін геолокациямен бөлісіңіз.`,
+    `📍 *2/3-қадам: Нақты геолокация*\n\n` +
+    `Намаз уақыттарын дәл анықтау үшін геолокацияңызбен бөлісіңіз.\n\n` +
+    `⚠️ *Маңызды:* Дәл уақыттар үшін геолокация міндетті!`,
     {
       parse_mode: 'Markdown',
       reply_markup: {
         keyboard: [
-          [{ text: '📍 Геолокацияны жіберу', request_location: true }],
-          [{ text: '🌍 Астана' }, { text: '🌍 Алматы' }],
-          [{ text: '🌍 Шымкент' }, { text: '🌍 Басқа қала' }]
+          [{ text: '📍 Геолокацияны жіберу', request_location: true }]
         ],
-        resize_keyboard: true
+        resize_keyboard: true,
+        one_time_keyboard: true
       }
     }
   );
-
   setState(userId, 'WAITING_LOCATION');
 }
 
@@ -826,20 +835,84 @@ bot.on('location', async (msg) => {
   const chatId = msg.chat.id;
   const state = getState(userId);
   
-  if (state === 'WAITING_LOCATION') {
+  if (state === 'WAITING_LOCATION' || state === 'CHANGING_CITY') {
     const { latitude, longitude } = msg.location;
     
-    // Получаем город через Reverse Geocoding (можно добавить позже)
-    let city = 'Almaty';
-    
-    await updateUserOnboarding(userId, {
-      location: { city, country: 'Kazakhstan', latitude, longitude }
-    });
-    
-    // ✅ ПРАВИЛЬНО - используем импортированную функцию:
-    await updateUserPrayerTimes(userId);
-    
-    await requestPromoCode(chatId, userId);
+    try {
+      // ✅ Определяем часовой пояс по координатам
+      const timezone = geoTz.find(latitude, longitude)[0];
+      
+      // ✅ Определяем город и страну по координатам (Reverse Geocoding)
+      await bot.sendMessage(chatId, '⏳ Анықталуда...', { parse_mode: 'Markdown' });
+      
+      const geoResult = await geocoder.reverse({ lat: latitude, lon: longitude });
+      
+      let city = 'Unknown';
+      let country = 'Unknown';
+      
+      if (geoResult && geoResult.length > 0) {
+        city = geoResult[0].city || geoResult[0].county || geoResult[0].state || 'Unknown';
+        country = geoResult[0].country || 'Unknown';
+      }
+      
+      console.log(`🌍 User ${userId}: (${latitude}, ${longitude}) → ${city}, ${country} | ${timezone}`);
+      
+      await updateUserOnboarding(userId, {
+        location: { 
+          city, 
+          country, 
+          latitude, 
+          longitude,
+          timezone
+        }
+      });
+      
+      // ✅ Обновляем времена намазов
+      await updateUserPrayerTimes(userId);
+      
+      // 📍 СМЕНА ГОРОДА (через геолокацию)
+      if (state === 'CHANGING_CITY') {
+        if (text === '❌ Болдырмау') {
+          await bot.sendMessage(chatId, 'Өзгертілді ✅', {
+            reply_markup: {
+              keyboard: [
+                [{
+                  text: '📱 ImanTap ашу',
+                  web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
+                }],
+                ['⚙️ Баптаулар', '📊 Статистика'],
+                ['🎁 Менің промокодым']
+              ],
+              resize_keyboard: true
+            }
+          });
+          clearSession(userId);
+          return;
+        }
+        
+        // Если не кнопка отмены - просим геолокацию
+        await bot.sendMessage(chatId, 
+          '📍 Геолокацияны жіберу керек!\n\nТөмендегі батырманы басыңыз:',
+          {
+            reply_markup: {
+              keyboard: [
+                [{ text: '📍 Геолокацияны жіберу', request_location: true }],
+                ['❌ Болдырмау']
+              ],
+              resize_keyboard: true
+            }
+          }
+        );
+        return;
+      }
+      
+      // Если это онбординг - продолжаем
+      await requestPromoCode(chatId, userId);
+      
+    } catch (error) {
+      console.error('❌ Ошибка обработки геолокации:', error);
+      await bot.sendMessage(chatId, '❌ Қате орын алды. Қайталап көріңіз.');
+    }
   }
 });
 
@@ -941,53 +1014,14 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // Выбор города вручную
-  if (state === 'WAITING_LOCATION') {
-    let city = text.replace(/[🌍📍]/g, '').trim();
-    
-    if (!city) {
-      await bot.sendMessage(chatId, 'Қала атауын жазыңыз:', {
-        reply_markup: { remove_keyboard: true }
-      });
-      setState(userId, 'WAITING_CITY_NAME');
-      return;
-    }
-    
-    await updateUserOnboarding(userId, {
-      location: { city, country: 'Kazakhstan', latitude: null, longitude: null }
-    });
-    
-    // ✅ ДОБАВЬТЕ обновление времен намазов
-    await updateUserPrayerTimes(userId);
-    
-    await requestPromoCode(chatId, userId);
-    return;
-  }
-
-  // Ввод названия города
-  if (state === 'WAITING_CITY_NAME') {
-    const city = text.trim();
-    await updateUserOnboarding(userId, {
-      location: { city, country: 'Kazakhstan', latitude: null, longitude: null }
-    });
-    
-    // ✅ ДОБАВЬТЕ обновление времен намазов
-    await updateUserPrayerTimes(userId);
-    
-    await requestPromoCode(chatId, userId);
-    return;
-  }
-
-  // 📍 СМЕНА ГОРОДА (через настройки)
+  // 📍 СМЕНА ГОРОДА (только через геолокацию)
   if (state === 'CHANGING_CITY') {
-    let city = text.trim();
-    
-    if (city === '❌ Болдырмау') {
+    if (text === '❌ Болдырмау') {
       await bot.sendMessage(chatId, 'Болдырылды ✅', {
         reply_markup: {
           keyboard: [
-            [{ 
-              text: '📱 ImanTap ашу', 
+            [{
+              text: '📱 ImanTap ашу',
               web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
             }],
             ['⚙️ Баптаулар', '📊 Статистика'],
@@ -1000,65 +1034,23 @@ bot.on('message', async (msg) => {
       return;
     }
     
-    if (!city) {
-      await bot.sendMessage(chatId, '❌ Қала атауын жазыңыз');
-      return;
-    }
-    
-    try {
-      await updateUserOnboarding(userId, {
-        location: { city, country: 'Kazakhstan', latitude: null, longitude: null }
-      });
-      
-      // ✅ Обновляем времена намазов для нового города
-      const success = await updateUserPrayerTimes(userId);
-      
-      if (success) {
-        const user = await getUserById(userId);
-        await bot.sendMessage(chatId, 
-          `✅ Қала өзгертілді: *${city}*\n\n` +
-          `🌅 Таң намазы: ${user.prayerTimes.fajr}\n` +
-          `🌆 Ақшам намазы: ${user.prayerTimes.maghrib}`,
-          { 
-            parse_mode: 'Markdown',
-            reply_markup: {
-              keyboard: [
-                [{ 
-                  text: '📱 ImanTap ашу', 
-                  web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
-                }],
-                ['⚙️ Баптаулар', '📊 Статистика'],
-                ['🎁 Менің промокодым']
-              ],
-              resize_keyboard: true
-            }
-          }
-        );
-      } else {
-        await bot.sendMessage(chatId, 
-          `✅ Қала өзгертілді: *${city}*\n\n⚠️ Намаз уақыттары табылмады. /settings арқылы қайталап көріңіз.`, 
-          {
-            parse_mode: 'Markdown',
-            reply_markup: {
-              keyboard: [
-                [{ 
-                  text: '📱 ImanTap ашу', 
-                  web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
-                }],
-                ['⚙️ Баптаулар', '📊 Статистика'],
-                ['🎁 Менің промокодым']
-              ],
-              resize_keyboard: true
-            }
-          }
-        );
+    // Если пользователь написал текст вместо геолокации - просим геолокацию
+    await bot.sendMessage(chatId, 
+      '📍 *Геолокацияны жіберу керек!*\n\n' +
+      'Дәл уақыттарды анықтау үшін геолокациямен бөлісіңіз.\n\n' +
+      'Төмендегі батырманы басыңыз:',
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          keyboard: [
+            [{ text: '📍 Геолокацияны жіберу', request_location: true }],
+            ['❌ Болдырмау']
+          ],
+          resize_keyboard: true,
+          one_time_keyboard: true
+        }
       }
-      
-      clearSession(userId);
-    } catch (error) {
-      console.error('CHANGING_CITY ошибка:', error);
-      await bot.sendMessage(chatId, '❌ Қате. Қайталап көріңіз.');
-    }
+    );
     return;
   }
 
@@ -1519,7 +1511,7 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       bot.sendMessage(
         chatId,
         `Ассаляму Алейкум, ${from.first_name}! 🤲\n\n` +
-        `Imantap-қа қайта қош келдіңіз!\n\n` +
+        `ImanTap-қа қайта қош келдіңіз!\n\n` +
         `Трекерді ашу үшін төмендегі батырманы басыңыз:`,
         {
           reply_markup: {
