@@ -1525,9 +1525,11 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
           reply_markup: {
             keyboard: [
               [{
-                text: "📱 Рамазан трекерін ашу",
+                text: '📱 ImanTap ашу',
                 web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
-              }]
+              }],
+              ['⚙️ Баптаулар', '📊 Статистика'],
+              ['🎁 Менің промокодым']
             ],
             resize_keyboard: true
           }
