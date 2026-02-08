@@ -2017,12 +2017,19 @@ const server = http.createServer(async (req, res) => {
   
   const origin = req.headers.origin || req.headers.referer;
   
-  // ✅ ВАЖНО: Для Telegram WebApp разрешаем запросы БЕЗ origin
-  const isTelegramRequest = !origin || origin.includes('t.me') || origin.includes('telegram');
+  // ✅ КРИТИЧНО: Telegram WebApp может не отправлять origin
+  const isTelegramRequest = !origin || 
+                           origin?.includes('t.me') || 
+                           origin?.includes('telegram') ||
+                           origin?.includes('railway.app');
   
   if (isTelegramRequest || allowedOrigins.some(allowed => origin?.includes(allowed))) {
     res.setHeader('Access-Control-Allow-Origin', origin || '*');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
+  } else {
+    // НЕ блокируем, просто логируем
+    console.log('⚠️ Unknown origin:', origin);
+    res.setHeader('Access-Control-Allow-Origin', '*');
   }
   
   // OPTIONS preflight
@@ -2043,35 +2050,6 @@ const server = http.createServer(async (req, res) => {
       res.statusCode = 200;
       res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
       return;
-    }
-
-    // API: Проверка доступа (новый endpoint для miniapp)
-    if (url.pathname === '/api/check-access') {
-      const userId = parseInt(url.searchParams.get('userId'));
-      
-      if (!userId) {
-        res.statusCode = 400;
-        res.end(JSON.stringify({ success: false, error: 'userId required' }));
-        return;
-      }
-      
-      try {
-        const access = await getUserAccess(userId);
-        res.statusCode = 200;
-        res.end(JSON.stringify({
-          success: true,
-          hasAccess: access.hasAccess,
-          paymentStatus: access.paymentStatus,
-          demoExpires: access.demoExpires,
-          reason: access.reason
-        }));
-        return;
-      } catch (error) {
-        console.error('❌ API Error /check-access:', error);
-        res.statusCode = 500;
-        res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
-        return;
-      }
     }
 
     // ✅ API: /api/check-access (для фронтенда miniapp)
