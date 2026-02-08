@@ -5,7 +5,6 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import geoTz from 'geo-tz';
-import NodeGeocoder from 'node-geocoder';
 import { connectDB, getDB, createIndexes } from './db.js';
 import { getPrayerTimesByCity, calculateReminderTime, updateUserPrayerTimes } from './prayerTimesService.js';
 import {
@@ -46,12 +45,37 @@ import {
 } from './sessionManager.js';
 import schedule from 'node-schedule';
 
-// Настройка geocoder
-const geocoder = NodeGeocoder({
-  provider: 'openstreetmap',
-  httpAdapter: 'https',
-  formatter: null
-});
+// ✅ Функция определения города по координатам с User-Agent
+async function getCityFromCoordinates(latitude, longitude) {
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&accept-language=en`;
+    
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'ImanTap/1.0 (Telegram Bot; https://t.me/imantap_bot)'
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error('Nominatim API error');
+    }
+    
+    const data = await response.json();
+    
+    const city = data.address?.city || 
+                 data.address?.town || 
+                 data.address?.village || 
+                 data.address?.state || 
+                 'Unknown';
+    const country = data.address?.country || 'Unknown';
+    
+    return { city, country };
+  } catch (error) {
+    console.error('❌ Ошибка Nominatim:', error.message);
+    // Возвращаем заглушку если API недоступен
+    return { city: 'Unknown', country: 'Unknown' };
+  }
+}
 
 // ✅ Простая защита от DDOS
 const requestCounts = new Map();
@@ -845,15 +869,7 @@ bot.on('location', async (msg) => {
       // ✅ Определяем город и страну по координатам (Reverse Geocoding)
       await bot.sendMessage(chatId, '⏳ Анықталуда...', { parse_mode: 'Markdown' });
       
-      const geoResult = await geocoder.reverse({ lat: latitude, lon: longitude });
-      
-      let city = 'Unknown';
-      let country = 'Unknown';
-      
-      if (geoResult && geoResult.length > 0) {
-        city = geoResult[0].city || geoResult[0].county || geoResult[0].state || 'Unknown';
-        country = geoResult[0].country || 'Unknown';
-      }
+      const { city, country } = await getCityFromCoordinates(latitude, longitude);
       
       console.log(`🌍 User ${userId}: (${latitude}, ${longitude}) → ${city}, ${country} | ${timezone}`);
       
