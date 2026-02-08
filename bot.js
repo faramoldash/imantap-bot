@@ -26,7 +26,8 @@ import {
   addUserXP,
   getGlobalLeaderboard,
   getUserRank,
-  getFriendsLeaderboard
+  getFriendsLeaderboard,
+  getCountriesLeaderboard
 } from './userService.js';
 import {
   isAdmin,
@@ -2230,15 +2231,24 @@ const server = http.createServer(async (req, res) => {
     // ✅ API: Лидерборд по странам (ИСПРАВЛЕННЫЙ)
     if (url.pathname === '/api/leaderboard/countries') {
       try {
-        // Пока заглушка - можно реализовать позже
-        res.statusCode = 200;
-        res.end(JSON.stringify({ 
-          success: true, 
-          data: [],  // ✅ ПУСТОЙ массив вместо объектов
-          total: 0,
-          hasMore: false
-        }));
+      const country = url.searchParams.get('country');
+      const limit = parseInt(url.searchParams.get('limit') || '50');
+      
+      if (!country) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ success: false, error: 'country parameter required' }));
         return;
+      }
+      
+      const leaderboard = await getCountriesLeaderboard(country, limit);
+      
+      res.statusCode = 200;
+      res.end(JSON.stringify({ 
+        success: true, 
+        data: leaderboard,
+        total: leaderboard.length,
+        hasMore: false
+      }));        return;
       } catch (error) {
         console.error('❌ API Error /leaderboard/countries:', error);
         res.statusCode = 500;
