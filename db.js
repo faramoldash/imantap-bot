@@ -11,8 +11,11 @@ if (!connectionString) {
 
 const client = new MongoClient(connectionString, {
   serverSelectionTimeoutMS: 5000,
-  maxPoolSize: 10,
-});
+  maxPoolSize: 50, // Увеличено для production
+  minPoolSize: 5,  // Минимальный размер пула
+  maxIdleTimeMS: 30000, // Закрывать неактивные соединения через 30с
+  retryWrites: true,
+  retryReads: true});
 
 let db;
 
