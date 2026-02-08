@@ -2114,7 +2114,7 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // API: Sync данных пользователя
+    // API: Sync данных пользователя (POST)
     if (url.pathname.match(/^\/api\/user\/\d+\/sync$/) && req.method === 'POST') {
       const userId = parseInt(url.pathname.split('/')[3]);
       
@@ -2124,17 +2124,39 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      try {
-        const userData = await getUserFullData(userId);
-        res.statusCode = 200;
-        res.end(JSON.stringify({ success: true, data: userData }));
-        return;
-      } catch (error) {
-        console.error('❌ API Error /sync:', error);
-        res.statusCode = 500;
-        res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
-        return;
-      }
+      // Читаем body запроса
+      let body = '';
+      req.on('data', chunk => {
+        body += chunk.toString();
+      });
+      
+      req.on('end', async () => {
+        try {
+          const progressData = JSON.parse(body);
+          
+          // Обновляем данные пользователя
+          const success = await updateUserProgress(userId, progressData);
+          
+          if (success) {
+            console.log(`✅ Прогресс синхронизирован для пользователя ${userId}`);
+            
+            // Возвращаем обновлённые данные
+            const updatedData = await getUserFullData(userId);
+            res.statusCode = 200;
+            res.end(JSON.stringify({ success: true, data: updatedData }));
+          } else {
+            console.error(`❌ Не удалось обновить данные для ${userId}`);
+            res.statusCode = 500;
+            res.end(JSON.stringify({ success: false, error: 'Failed to update progress' }));
+          }
+        } catch (parseError) {
+          console.error('❌ Ошибка парсинга JSON:', parseError);
+          res.statusCode = 400;
+          res.end(JSON.stringify({ success: false, error: 'Invalid JSON' }));
+        }
+      });
+      
+      return;
     }
 
     // API: Получить данные пользователя
@@ -2154,7 +2176,7 @@ const server = http.createServer(async (req, res) => {
 
     // ✅ API: Получить полные данные пользователя
     if (url.pathname.match(/^\/api\/user\/\d+\/full$/)) {
-      const userId = parseInt(url.pathname.split('/')[3]);
+      const userId = parseInt(url.pathname.split('/')[4]);
       
       if (!userId) {
         res.statusCode = 400;
