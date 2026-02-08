@@ -673,7 +673,7 @@ async function checkAndUnlockBadges(userId) {
 }
 
 // Получить список всех стран пользователей
-export async function getCountries() {
+async function getCountries() {
   try {
     const db = getDB();
     const users = db.collection('users');
@@ -692,7 +692,7 @@ export async function getCountries() {
 }
 
 // Получить список городов в стране
-export async function getCities(country) {
+async function getCities(country) {
   try {
     const db = getDB();
     const users = db.collection('users');
@@ -712,7 +712,7 @@ export async function getCities(country) {
 }
 
 // Лидерборд с фильтрами по стране/городу
-export async function getFilteredLeaderboard(options = {}) {
+async function getFilteredLeaderboard(options = {}) {
   try {
     const { limit = 50, offset = 0, country = null, city = null } = options;
     const db = getDB();
