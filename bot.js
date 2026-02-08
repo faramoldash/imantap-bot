@@ -2149,6 +2149,74 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // ✅ API: Получить полные данные пользователя
+    if (url.pathname.match(/^\/api\/user\/\d+\/full$/)) {
+      const userId = parseInt(url.pathname.split('/')[3]);
+      
+      if (!userId) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ success: false, error: 'userId required' }));
+        return;
+      }
+      
+      try {
+        const userData = await getUserFullData(userId);
+        res.statusCode = 200;
+        res.end(JSON.stringify({ success: true, data: userData }));
+        return;
+      } catch (error) {
+        console.error('❌ API Error /user/full:', error);
+        res.statusCode = 500;
+        res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
+        return;
+      }
+    }
+
+    // ✅ API: Глобальный лидерборд
+    if (url.pathname === '/api/leaderboard/global') {
+      try {
+        const limit = parseInt(url.searchParams.get('limit') || '50');
+        const offset = parseInt(url.searchParams.get('offset') || '0');
+        
+        const leaderboard = await getGlobalLeaderboard(limit);
+        const sliced = leaderboard.slice(offset, offset + limit);
+        
+        res.statusCode = 200;
+        res.end(JSON.stringify({ 
+          success: true, 
+          data: sliced,
+          total: leaderboard.length 
+        }));
+        return;
+      } catch (error) {
+        console.error('❌ API Error /leaderboard/global:', error);
+        res.statusCode = 500;
+        res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
+        return;
+      }
+    }
+
+    // ✅ API: Лидерборд по странам (пока заглушка)
+    if (url.pathname === '/api/leaderboard/countries') {
+      try {
+        // Заглушка - можно потом реализовать
+        res.statusCode = 200;
+        res.end(JSON.stringify({ 
+          success: true, 
+          data: [
+            { country: 'Kazakhstan', count: 10, totalXP: 5000 },
+            { country: 'Russia', count: 5, totalXP: 3000 }
+          ]
+        }));
+        return;
+      } catch (error) {
+        console.error('❌ API Error /leaderboard/countries:', error);
+        res.statusCode = 500;
+        res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
+        return;
+      }
+    }
+
     // 404 для всех остальных путей
     res.statusCode = 404;
     res.end(JSON.stringify({ success: false, error: 'Not Found' }));
