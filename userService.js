@@ -139,7 +139,10 @@ async function incrementReferralCount(promoCode) {
   try {
     const db = getDB();
     const usersCollection = db.collection('users');
-
+    
+    // Сначала найдём пользователя по промокоду
+    const user = await usersCollection.findOne({ promoCode: promoCode.toUpperCase() });
+    
     const result = await usersCollection.updateOne(
       { promoCode: promoCode.toUpperCase() },
       { 
@@ -147,16 +150,17 @@ async function incrementReferralCount(promoCode) {
         $set: { updatedAt: new Date() }
       }
     );
-
-    if (result.modifiedCount > 0) {
-      console.log(`🎉 Реферал засчитан для промокода: ${promoCode}`);
+    
+    if (result.modifiedCount > 0 && user) {
+      await checkAndUnlockBadges(user.userId); // ← ДОБАВИТЬ ЭТУ СТРОКУ
+      console.log(`✅ Увеличен счётчик рефералов для промокода: ${promoCode}`);
       return true;
     }
-
-    console.log(`⚠️ Промокод не найден: ${promoCode}`);
+    
+    console.log(`❌ Не найден пользователь с промокодом: ${promoCode}`);
     return false;
   } catch (error) {
-    console.error('❌ Ошибка в incrementReferralCount:', error);
+    console.error('❌ Ошибка incrementReferralCount:', error);
     throw error;
   }
 }
@@ -506,6 +510,7 @@ async function addUserXP(userId, amount, reason = '') {
     );
     
     if (result.modifiedCount > 0) {
+      await checkAndUnlockBadges(userId);
       console.log(`✅ Добавлено ${amount} XP для userId ${userId}. Причина: ${reason}`);
       return true;
     }
@@ -620,6 +625,50 @@ async function getFriendsLeaderboard(userId, limit = 20) {
   } catch (error) {
     console.error('❌ getFriendsLeaderboard ошибка:', error);
     throw error;
+  }
+}
+
+// Функция для проверки и выдачи новых бейджей
+async function checkAndUnlockBadges(userId) {
+  try {
+    const db = getDB();
+    const users = db.collection('users');
+    const user = await users.findOne({ userId });
+    
+    if (!user) return;
+    
+    const unlockedBadges = user.unlockedBadges || [];
+    let newBadges = [...unlockedBadges];
+    
+    // Проверка: Друг народа (10+ рефералов)
+    if ((user.invitedCount || 0) >= 10 && !newBadges.includes('social_butterfly')) {
+      newBadges.push('social_butterfly');
+    }
+    
+    // Проверка: Лидер друзей (1 место среди друзей)
+    const friendsLeaderboard = await getFriendsLeaderboard(userId, 20);
+    if (friendsLeaderboard && friendsLeaderboard.length > 0 && friendsLeaderboard[0].userId === userId && !newBadges.includes('friends_leader')) {
+      newBadges.push('friends_leader');
+    }
+    
+    // Проверка: Легенда (10000+ XP)
+    if (user.xp >= 10000 && !newBadges.includes('legend')) {
+      newBadges.push('legend');
+    }
+    
+    // Если есть новые бейджи - обновить
+    if (newBadges.length > unlockedBadges.length) {
+      await users.updateOne(
+        { userId },
+        { $set: { unlockedBadges: newBadges } }
+      );
+      console.log(`✨ Пользователь ${userId} получил новые бейджи:`, newBadges.filter(b => !unlockedBadges.includes(b)));
+    }
+    
+    return newBadges;
+  } catch (error) {
+    console.error('Ошибка проверки бейджей:', error);
+    return [];
   }
 }
 
