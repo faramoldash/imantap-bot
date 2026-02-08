@@ -47,9 +47,21 @@ import schedule from 'node-schedule';
 // ✅ Простая защита от DDOS
 const requestCounts = new Map();
 const RATE_LIMIT = 100; // максимум запросов
+const MAX_USERS_IN_MEMORY = 10000; // Максимум пользователей в памяти (защита от memory leak)
 const RATE_WINDOW = 60000; // за 1 минуту
 
 function checkRateLimit(userId) {
+    // Защита от memory leak: очищаем половину старых записей при превышении лимита
+  if (requestCounts.size > MAX_USERS_IN_MEMORY) {
+    const sortedEntries = Array.from(requestCounts.entries())
+      .sort((a, b) => a[1][0] - b[1][0]); // Сортируем по времени первого запроса
+    const toDelete = Math.floor(MAX_USERS_IN_MEMORY / 2);
+    for (let i = 0; i < toDelete; i++) {
+      requestCounts.delete(sortedEntries[i][0]);
+    }
+    console.log(`⚖️ Rate limit: очищено ${toDelete} записей. Осталось: ${requestCounts.size}`);
+  }
+
   const now = Date.now();
   const userRequests = requestCounts.get(userId) || [];
   
@@ -105,6 +117,16 @@ bot.deleteWebHook().then(() => {
   console.log('✅ Webhook удалён, используется polling');
 }).catch(() => {
   console.log('ℹ️ Webhook не был установлен, используется polling');
+});
+
+// Обработчики ошибок polling (критично для стабильности)
+bot.on('polling_error', (error) => {
+  console.error('❌ Polling error:', error.code, error.message);
+  // Не падаем, просто логируем
+});
+
+bot.on('error', (error) => {
+  console.error('❌ Bot error:', error.message);
 });
 
 // Подключение к MongoDB
@@ -2001,22 +2023,24 @@ const server = http.createServer(async (req, res) => {
     if (req.method !== 'GET' && req.method !== 'OPTIONS') {
       res.statusCode = 403;
       res.setHeader('Content-Type', 'application/json');
+        // Если origin неизвестный - БЛОКИРУЕМ ВСЕ запросы (критично для безопасности)
+    if (!origin || !allowedOrigins.includes(origin)) {
+      // OPTIONS всегда пропускаем (для CORS preflight)
+      if (req.method === 'OPTIONS') {
+        res.statusCode = 200;
+        res.end();
+        return;
+      }
+      
+      // ВСЕ остальные запросы - блокируем
+      res.statusCode = 403;
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
       res.end(JSON.stringify({ 
         success: false, 
-        error: 'Forbidden: Invalid origin' 
+        error: 'Forbidden: Invalid or missing origin' 
       }));
       return;
-    }
-  }
-
-  // ✅ Разрешаем только проверенные origins
-  if (allowedOrigins.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-  }
-
+    
   if (req.method === 'OPTIONS') {
     res.statusCode = 200;
     res.end();
