@@ -2356,16 +2356,64 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // ========== API ЭНДПОИНТЫ ДЛЯ ЛИДЕРБОРДА ==========
+    // ========== API ЭНДПОИНТЫ ДЛЯ ЛИДЕРБОРДА (РАСШИРЕННАЯ ВЕРСИЯ) ==========
 
     // GET /api/leaderboard/global - Глобальный лидерборд
     if (req.method === 'GET' && url.pathname === '/api/leaderboard/global') {
       try {
-        const limit = parseInt(url.searchParams.get('limit')) || 10;
-        const leaderboard = await getGlobalLeaderboard(limit);
+        const limit = parseInt(url.searchParams.get('limit')) || 20;
+        const offset = parseInt(url.searchParams.get('offset')) || 0;
+        const country = url.searchParams.get('country');
+        const city = url.searchParams.get('city');
+        
+        const db = getDB();
+        const users = db.collection('users');
+        
+        // Построение фильтра
+        const filter = {
+          paymentStatus: { $in: ['paid', 'demo'] }
+        };
+        
+        if (country) {
+          filter['location.country'] = country;
+        }
+        
+        if (city) {
+          filter['location.city'] = city;
+        }
+        
+        // Получение пользователей с пагинацией
+        const leaderboard = await users
+          .find(filter)
+          .sort({ xp: -1 })
+          .skip(offset)
+          .limit(limit)
+          .project({
+            userId: 1,
+            name: 1,
+            username: 1,
+            xp: 1,
+            'location.city': 1,
+            'location.country': 1,
+            photoUrl: 1
+          })
+          .toArray();
+        
+        // Подсчет общего количества для пагинации
+        const total = await users.countDocuments(filter);
+        
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
         res.statusCode = 200;
-        res.end(JSON.stringify({ success: true, data: leaderboard }));
+        res.end(JSON.stringify({ 
+          success: true, 
+          data: leaderboard,
+          pagination: {
+            total,
+            offset,
+            limit,
+            hasMore: offset + limit < total
+          }
+        }));
       } catch (error) {
         console.error('Ошибка получения глобального лидерборда:', error);
         res.statusCode = 500;
@@ -2380,13 +2428,66 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && friendsLeaderboardMatch) {
       const userId = parseInt(friendsLeaderboardMatch[1]);
       try {
-        const limit = parseInt(url.searchParams.get('limit')) || 10;
+        const limit = parseInt(url.searchParams.get('limit')) || 20;
         const leaderboard = await getFriendsLeaderboard(userId, limit);
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
         res.statusCode = 200;
         res.end(JSON.stringify({ success: true, data: leaderboard }));
       } catch (error) {
         console.error('Ошибка получения лидерборда друзей:', error);
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.end(JSON.stringify({ success: false, error: 'Ошибка сервера' }));
+      }
+      return;
+    }
+
+    // GET /api/leaderboard/countries - Список стран для фильтра
+    if (req.method === 'GET' && url.pathname === '/api/leaderboard/countries') {
+      try {
+        const db = getDB();
+        const users = db.collection('users');
+        
+        const countries = await users.distinct('location.country', {
+          'location.country': { $exists: true, $ne: null },
+          paymentStatus: { $in: ['paid', 'demo'] }
+        });
+        
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.statusCode = 200;
+        res.end(JSON.stringify({ success: true, data: countries.filter(c => c) }));
+      } catch (error) {
+        console.error('Ошибка получения стран:', error);
+        res.statusCode = 500;
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.end(JSON.stringify({ success: false, error: 'Ошибка сервера' }));
+      }
+      return;
+    }
+
+    // GET /api/leaderboard/cities?country=X - Список городов для фильтра
+    if (req.method === 'GET' && url.pathname === '/api/leaderboard/cities') {
+      try {
+        const country = url.searchParams.get('country');
+        const db = getDB();
+        const users = db.collection('users');
+        
+        const filter = {
+          'location.city': { $exists: true, $ne: null },
+          paymentStatus: { $in: ['paid', 'demo'] }
+        };
+        
+        if (country) {
+          filter['location.country'] = country;
+        }
+        
+        const cities = await users.distinct('location.city', filter);
+        
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.statusCode = 200;
+        res.end(JSON.stringify({ success: true, data: cities.filter(c => c) }));
+      } catch (error) {
+        console.error('Ошибка получения городов:', error);
         res.statusCode = 500;
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
         res.end(JSON.stringify({ success: false, error: 'Ошибка сервера' }));
