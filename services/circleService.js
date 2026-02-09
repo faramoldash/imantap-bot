@@ -132,11 +132,13 @@ async function getCircleDetails(circleId, requesterId) {
 
     const isMember = circle.members.some(
       m => {
-        const match = (m.userId === parseInt(requesterId) || m.userId === requesterId) && m.status === 'active';
+        // Разрешаем доступ для active и pending (чтобы видеть детали перед принятием)
+        const match = (m.userId === parseInt(requesterId) || m.userId === requesterId) && 
+                      (m.status === 'active' || m.status === 'pending');
         console.log('🔍 Сравнение:', {
           memberUserId: m.userId,
           requesterId,
-          parsed: parseInt(requesterId),
+          status: m.status,
           match
         });
         return match;
