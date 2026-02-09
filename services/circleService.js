@@ -340,10 +340,46 @@ async function acceptInvite(circleId, userId) {
   }
 }
 
+/**
+ * Отклонить приглашение
+ */
+async function declineInvite(circleId, userId) {
+  try {
+    const db = getDB();
+    const circles = db.collection('circles');
+    
+    const result = await circles.updateOne(
+      { 
+        circleId,
+        'members.userId': parseInt(userId),
+        'members.status': 'pending'
+      },
+      {
+        $set: {
+          'members.$.status': 'declined',
+          updatedAt: new Date().toISOString()
+        }
+      }
+    );
+    
+    if (result.modifiedCount === 0) {
+      throw new Error('Invite not found');
+    }
+    
+    console.log(`❌ Пользователь ${userId} отклонил приглашение в круг ${circleId}`);
+    
+    return { success: true, message: 'Invitation declined' };
+  } catch (error) {
+    console.error('❌ Ошибка отклонения приглашения:', error);
+    throw error;
+  }
+}
+
 export {
   createCircle,
   getUserCircles,
   getCircleDetails,
   inviteToCircle,
-  acceptInvite
+  acceptInvite,
+  declineInvite
 };

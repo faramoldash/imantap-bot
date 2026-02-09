@@ -52,7 +52,8 @@ import {
   getUserCircles, 
   getCircleDetails,
   inviteToCircle,
-  acceptInvite
+  acceptInvite,
+  declineInvite
 } from './services/circleService.js';
 
 // Экранирование специальных символов для Markdown
@@ -2469,6 +2470,29 @@ const server = http.createServer(async (req, res) => {
           res.end(JSON.stringify(result));
         } catch (error) {
           console.error('❌ API Error /circles/accept:', error);
+          res.statusCode = 400;
+          res.end(JSON.stringify({ success: false, error: error.message }));
+        }
+      });
+      
+      return;
+    }
+
+    // API: Отклонить приглашение
+    if (url.pathname === '/api/circles/decline' && req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => { body += chunk.toString(); });
+      
+      req.on('end', async () => {
+        try {
+          const { circleId, userId } = JSON.parse(body);
+          
+          const result = await declineInvite(circleId, userId);
+          
+          res.statusCode = 200;
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          console.error('❌ API Error /circles/decline:', error);
           res.statusCode = 400;
           res.end(JSON.stringify({ success: false, error: error.message }));
         }
