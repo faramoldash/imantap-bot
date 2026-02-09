@@ -53,7 +53,8 @@ import {
   getCircleDetails,
   inviteToCircle,
   acceptInvite,
-  declineInvite
+  declineInvite,
+  joinByCode
 } from './services/circleService.js';
 
 // Экранирование специальных символов для Markdown
@@ -2493,6 +2494,31 @@ const server = http.createServer(async (req, res) => {
           res.end(JSON.stringify(result));
         } catch (error) {
           console.error('❌ API Error /circles/decline:', error);
+          res.statusCode = 400;
+          res.end(JSON.stringify({ success: false, error: error.message }));
+        }
+      });
+      
+      return;
+    }
+
+    // API: Присоединиться по коду
+    if (url.pathname === '/api/circles/join' && req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => { body += chunk.toString(); });
+      
+      req.on('end', async () => {
+        try {
+          const { inviteCode, userId } = JSON.parse(body);
+          
+          console.log('🔗 JOIN REQUEST:', { inviteCode, userId });
+          
+          const result = await joinByCode(inviteCode, userId);
+          
+          res.statusCode = 200;
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          console.error('❌ API Error /circles/join:', error.message);
           res.statusCode = 400;
           res.end(JSON.stringify({ success: false, error: error.message }));
         }

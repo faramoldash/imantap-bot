@@ -375,11 +375,99 @@ async function declineInvite(circleId, userId) {
   }
 }
 
+/**
+ * Присоединиться к кругу по invite коду
+ */
+async function joinByCode(inviteCode, userId) {
+  try {
+    const db = getDB();
+    const circles = db.collection('circles');
+    const users = db.collection('users');
+    
+    // Находим круг по коду
+    const circle = await circles.findOne({ inviteCode: inviteCode.toUpperCase() });
+    
+    if (!circle) {
+      throw new Error('Circle not found');
+    }
+    
+    // Проверяем не состоит ли уже
+    const existingMember = circle.members.find(m => m.userId === parseInt(userId));
+    
+    if (existingMember) {
+      if (existingMember.status === 'active') {
+        throw new Error('Already a member');
+      }
+      
+      // Если был pending или declined - активируем
+      await circles.updateOne(
+        { 
+          circleId: circle.circleId,
+          'members.userId': parseInt(userId)
+        },
+        {
+          $set: {
+            'members.$.status': 'active',
+            'members.$.joinedAt': new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }
+        }
+      );
+      
+      console.log(`✅ Пользователь ${userId} присоединился к кругу ${circle.name} (реактивация)`);
+      
+      return { success: true, circle };
+    }
+    
+    // Проверяем лимит
+    const activeCount = circle.members.filter(m => m.status === 'active').length;
+    if (activeCount >= circle.settings.maxMembers) {
+      throw new Error('Circle is full');
+    }
+    
+    // Получаем данные пользователя
+    const user = await users.findOne({ userId: parseInt(userId) });
+    
+    if (!user) {
+      throw new Error('User not found');
+    }
+    
+    // Добавляем нового участника
+    const now = new Date().toISOString();
+    
+    await circles.updateOne(
+      { circleId: circle.circleId },
+      {
+        $push: {
+          members: {
+            userId: parseInt(userId),
+            username: user.username || '',
+            name: user.name || 'User',
+            photoUrl: user.photoUrl || '',
+            role: 'member',
+            joinedAt: now,
+            status: 'active'
+          }
+        },
+        $set: { updatedAt: now }
+      }
+    );
+    
+    console.log(`✅ Пользователь ${userId} присоединился к кругу ${circle.name} по коду ${inviteCode}`);
+    
+    return { success: true, circle };
+  } catch (error) {
+    console.error('❌ Ошибка присоединения по коду:', error);
+    throw error;
+  }
+}
+
 export {
   createCircle,
   getUserCircles,
   getCircleDetails,
   inviteToCircle,
   acceptInvite,
-  declineInvite
+  declineInvite,
+  joinByCode
 };
