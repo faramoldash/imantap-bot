@@ -2451,15 +2451,15 @@ const server = http.createServer(async (req, res) => {
                 `👋 <b>${result.inviterUsername}</b> сізді топқа шақырды!\n\n` +
                 `🤝 <b>${result.circleName}</b>\n` +
                 (result.circleDescription ? `📝 ${result.circleDescription}\n` : '') +
-                `👥 ${result.memberCount} мүше\n\n` +
-                `Шақыруды қабылдау үшін mini app ашыңыз 👇`;
+                `👥 ${result.memberCount} адам\n\n` +
+                `Шақыруды қабылдау үшін ImanTap ашыңыз 👇`;
 
               await bot.sendMessage(result.targetUserId, message, {
                 parse_mode: 'HTML',
                 reply_markup: {
                   inline_keyboard: [[
                     {
-                      text: '✅ Mini app ашу',
+                      text: 'ImanTap ашу',
                       url: miniAppUrl
                     }
                   ]]
