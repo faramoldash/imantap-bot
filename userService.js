@@ -786,6 +786,320 @@ async function getFilteredLeaderboard(options = {}) {
 }
 
 // =====================================================
+// 🤝 ФУНКЦИИ ДЛЯ КРУГОВ (CIRCLES)
+// =====================================================
+
+/**
+ * Создать новый круг
+ */
+async function createCircle(ownerId, name, description = '') {
+  try {
+    const db = getDB();
+    const circles = db.collection('circles');
+    
+    // Генерируем уникальный код приглашения
+    const inviteCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+    
+    const newCircle = {
+      circleId: `circle_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      name,
+      description,
+      ownerId: parseInt(ownerId),
+      inviteCode,
+      members: [
+        {
+          userId: parseInt(ownerId),
+          status: 'active',
+          joinedAt: new Date()
+        }
+      ],
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    await circles.insertOne(newCircle);
+    console.log(`✅ Создан новый круг: ${name} (${newCircle.circleId})`);
+    
+    return newCircle;
+  } catch (error) {
+    console.error('❌ Ошибка создания круга:', error);
+    throw error;
+  }
+}
+
+/**
+ * Получить круги пользователя
+ */
+async function getUserCircles(userId) {
+  try {
+    const db = getDB();
+    const circles = db.collection('circles');
+    
+    const userCircles = await circles.find({
+      'members.userId': parseInt(userId),
+      'members.status': 'active'
+    }).toArray();
+    
+    return userCircles;
+  } catch (error) {
+    console.error('❌ Ошибка получения кругов:', error);
+    throw error;
+  }
+}
+
+/**
+ * Получить детали круга с прогрессом участников
+ */
+async function getCircleDetails(circleId, requesterId) {
+  try {
+    const db = getDB();
+    const circles = db.collection('circles');
+    const users = db.collection('users');
+    
+    const circle = await circles.findOne({ circleId });
+    
+    if (!circle) {
+      throw new Error('Circle not found');
+    }
+    
+    // Проверяем что пользователь - участник круга
+    const isMember = circle.members.some(m => m.userId === parseInt(requesterId) && m.status === 'active');
+    
+    if (!isMember) {
+      throw new Error('Not a member of this circle');
+    }
+    
+    // Получаем прогресс всех активных участников
+    const activeMembers = circle.members.filter(m => m.status === 'active');
+    const memberIds = activeMembers.map(m => m.userId);
+    
+    const membersData = await users.find({
+      userId: { $in: memberIds }
+    }).toArray();
+    
+    // Вычисляем прогресс на сегодня для каждого участника
+    const today = new Date().toISOString().split('T')[0];
+    
+    const membersWithProgress = membersData.map(user => {
+      const todayProgress = user.progress?.[today] || {};
+      
+      // Считаем завершённые задачи
+      const completed = [
+        todayProgress.fast ? 1 : 0,
+        todayProgress.fajr ? 1 : 0,
+        todayProgress.dhuhr ? 1 : 0,
+        todayProgress.asr ? 1 : 0,
+        todayProgress.maghrib ? 1 : 0,
+        todayProgress.isha ? 1 : 0,
+        todayProgress.tarawih ? 1 : 0,
+        todayProgress.quran ? 1 : 0,
+        todayProgress.charity ? 1 : 0,
+        todayProgress.dua ? 1 : 0
+      ].filter(Boolean).length;
+      
+      const total = 10; // Всего задач
+      const percent = Math.round((completed / total) * 100);
+      
+      return {
+        userId: user.userId,
+        name: user.name || user.username || 'User',
+        username: user.username,
+        photoUrl: user.photoUrl,
+        xp: user.xp || 0,
+        todayProgress: {
+          completed,
+          total,
+          percent
+        }
+      };
+    });
+    
+    return {
+      ...circle,
+      membersWithProgress
+    };
+  } catch (error) {
+    console.error('❌ Ошибка получения деталей круга:', error);
+    throw error;
+  }
+}
+
+/**
+ * Пригласить пользователя в круг
+ */
+async function inviteToCircle(circleId, inviterId, targetUsername) {
+  try {
+    const db = getDB();
+    const circles = db.collection('circles');
+    const users = db.collection('users');
+    
+    // Находим круг
+    const circle = await circles.findOne({ circleId });
+    
+    if (!circle) {
+      throw new Error('Circle not found');
+    }
+    
+    // Проверяем что приглашающий - владелец
+    if (circle.ownerId !== parseInt(inviterId)) {
+      throw new Error('Only owner can invite');
+    }
+    
+    // Убираем @ если есть
+    const cleanUsername = targetUsername.replace('@', '');
+    
+    // Ищем пользователя по username
+    const targetUser = await users.findOne({
+      username: { $regex: new RegExp(`^@?${cleanUsername}$`, 'i') }
+    });
+    
+    if (!targetUser) {
+      throw new Error('User not found');
+    }
+    
+    // Проверяем что пользователь ещё не в круге
+    const alreadyMember = circle.members.some(m => m.userId === targetUser.userId);
+    
+    if (alreadyMember) {
+      throw new Error('User already in circle');
+    }
+    
+    // Добавляем приглашение
+    await circles.updateOne(
+      { circleId },
+      {
+        $push: {
+          members: {
+            userId: targetUser.userId,
+            status: 'pending',
+            invitedAt: new Date()
+          }
+        },
+        $set: { updatedAt: new Date() }
+      }
+    );
+    
+    console.log(`✅ Пользователь ${targetUser.username} приглашён в круг ${circle.name}`);
+    
+    return {
+      success: true,
+      message: 'User invited successfully',
+      invitedUser: {
+        userId: targetUser.userId,
+        username: targetUser.username,
+        name: targetUser.name
+      }
+    };
+  } catch (error) {
+    console.error('❌ Ошибка приглашения в круг:', error);
+    throw error;
+  }
+}
+
+/**
+ * Принять приглашение в круг
+ */
+async function acceptInvite(circleId, userId) {
+  try {
+    const db = getDB();
+    const circles = db.collection('circles');
+    
+    const result = await circles.updateOne(
+      { 
+        circleId,
+        'members.userId': parseInt(userId),
+        'members.status': 'pending'
+      },
+      {
+        $set: {
+          'members.$.status': 'active',
+          'members.$.joinedAt': new Date(),
+          updatedAt: new Date()
+        }
+      }
+    );
+    
+    if (result.modifiedCount === 0) {
+      throw new Error('Invitation not found or already accepted');
+    }
+    
+    console.log(`✅ Пользователь ${userId} принял приглашение в круг ${circleId}`);
+    
+    return { success: true, message: 'Invitation accepted' };
+  } catch (error) {
+    console.error('❌ Ошибка принятия приглашения:', error);
+    throw error;
+  }
+}
+
+/**
+ * Покинуть круг
+ */
+async function leaveCircle(circleId, userId) {
+  try {
+    const db = getDB();
+    const circles = db.collection('circles');
+    
+    const circle = await circles.findOne({ circleId });
+    
+    if (!circle) {
+      throw new Error('Circle not found');
+    }
+    
+    // Владелец не может покинуть свой круг
+    if (circle.ownerId === parseInt(userId)) {
+      throw new Error('Owner cannot leave circle');
+    }
+    
+    await circles.updateOne(
+      { 
+        circleId,
+        'members.userId': parseInt(userId)
+      },
+      {
+        $set: {
+          'members.$.status': 'left',
+          updatedAt: new Date()
+        }
+      }
+    );
+    
+    console.log(`✅ Пользователь ${userId} покинул круг ${circleId}`);
+    
+    return { success: true, message: 'Left circle successfully' };
+  } catch (error) {
+    console.error('❌ Ошибка выхода из круга:', error);
+    throw error;
+  }
+}
+
+/**
+ * Удалить круг (только владелец)
+ */
+async function deleteCircle(circleId, ownerId) {
+  try {
+    const db = getDB();
+    const circles = db.collection('circles');
+    
+    const result = await circles.deleteOne({
+      circleId,
+      ownerId: parseInt(ownerId)
+    });
+    
+    if (result.deletedCount === 0) {
+      throw new Error('Circle not found or you are not the owner');
+    }
+    
+    console.log(`✅ Круг ${circleId} удалён владельцем ${ownerId}`);
+    
+    return { success: true, message: 'Circle deleted' };
+  } catch (error) {
+    console.error('❌ Ошибка удаления круга:', error);
+    throw error;
+  }
+}
+
+// =====================================================
 // ЭКСПОРТЫ (ТОЛЬКО ОДИН РАЗ!)
 // =====================================================
 
@@ -811,5 +1125,12 @@ export {
   getFriendsLeaderboard,
   getCountries,
   getCities,
-  getFilteredLeaderboard
+  getFilteredLeaderboard,
+  createCircle,
+  getUserCircles,
+  getCircleDetails,
+  inviteToCircle,
+  acceptInvite,
+  leaveCircle,
+  deleteCircle
 };
