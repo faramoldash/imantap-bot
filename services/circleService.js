@@ -471,6 +471,56 @@ async function joinByCode(inviteCode, userId) {
   }
 }
 
+// Выйти из круга
+async function leaveCircle(circleId, userId) {
+  try {
+    const db = await getDB();
+    const circles = db.collection('circles');
+    
+    console.log(`🚪 Попытка выхода: userId=${userId}, circleId=${circleId}`);
+    
+    // Получаем круг
+    const circle = await circles.findOne({ circleId });
+    
+    if (!circle) {
+      throw new Error('Circle not found');
+    }
+    
+    // Проверяем что пользователь не владелец
+    if (circle.ownerId === parseInt(userId)) {
+      throw new Error('Owner cannot leave the circle. Delete the circle instead.');
+    }
+    
+    // Проверяем что пользователь участник
+    const memberIndex = circle.members.findIndex(
+      m => (m.userId === parseInt(userId) || m.userId === userId) && 
+           (m.status === 'active' || m.status === 'pending')
+    );
+    
+    if (memberIndex === -1) {
+      throw new Error('You are not a member of this circle');
+    }
+    
+    // Меняем статус на 'left'
+    await circles.updateOne(
+      { circleId },
+      { 
+        $set: { 
+          [`members.${memberIndex}.status`]: 'left',
+          [`members.${memberIndex}.leftAt`]: new Date()
+        } 
+      }
+    );
+    
+    console.log(`✅ Пользователь ${userId} вышел из круга ${circleId}`);
+    
+    return { success: true };
+  } catch (error) {
+    console.error('❌ Ошибка выхода из круга:', error);
+    throw error;
+  }
+}
+
 export {
   createCircle,
   getUserCircles,
@@ -478,5 +528,6 @@ export {
   inviteToCircle,
   acceptInvite,
   declineInvite,
-  joinByCode
+  joinByCode,
+  leaveCircle
 };

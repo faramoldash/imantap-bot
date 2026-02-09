@@ -54,7 +54,8 @@ import {
   inviteToCircle,
   acceptInvite,
   declineInvite,
-  joinByCode
+  joinByCode,
+  leaveCircle
 } from './services/circleService.js';
 
 // Экранирование специальных символов для Markdown
@@ -211,7 +212,7 @@ await createIndexes();
 
 const RAMADAN_MESSAGES = {
   suhur: {
-    kk: `🌙 *Ауыз бекітетін уақыт жақындап қалды*
+    kk: `🌙 *Ауыз бекітетін уақыт жақындап келеді*
 
 Сәресіде айтылатын дұға:
 
@@ -239,7 +240,7 @@ const RAMADAN_MESSAGES = {
 📿 Намаз Фаджр: {PRAYER_TIME}`
   },
   iftar: {
-    kk: `🌆 *Ауыз ашатын уақыт жақындап қалды*
+    kk: `🌆 *Ауыз ашатын уақыт жақындап келеді*
 
 Ауыз ашқанда айтылатын дұға:
 
@@ -250,7 +251,6 @@ const RAMADAN_MESSAGES = {
 *Мағынасы:* «Алла Тағалам! Сенің ризалығың үшін ораза ұстадым. Саған иман етіп, саған тәуекел жасадым. Сенің берген ризығыңмен аузымды аштым»
 
 Оразаңыз қабыл болсын! 🤲
-Асыққан-ұмтылғандарға берекет берсін! 🍽️
 
 📿 Ақшам намазы: {PRAYER_TIME}`,
     ru: `🌆 *Время ифтара приближается*
@@ -2500,6 +2500,31 @@ const server = http.createServer(async (req, res) => {
           res.end(JSON.stringify(result));
         } catch (error) {
           console.error('❌ API Error /circles/accept:', error);
+          res.statusCode = 400;
+          res.end(JSON.stringify({ success: false, error: error.message }));
+        }
+      });
+      
+      return;
+    }
+
+    // API: Выйти из круга
+    if (url.pathname === '/api/circles/leave' && req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => { body += chunk.toString(); });
+      
+      req.on('end', async () => {
+        try {
+          const { circleId, userId } = JSON.parse(body);
+          
+          console.log('🔍 LEAVE REQUEST:', { circleId, userId });
+          
+          const result = await leaveCircle(circleId, userId);
+          
+          res.statusCode = 200;
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          console.error('❌ API Error /circles/leave:', error.message);
           res.statusCode = 400;
           res.end(JSON.stringify({ success: false, error: error.message }));
         }
