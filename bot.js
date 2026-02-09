@@ -1022,7 +1022,6 @@ bot.on('message', async (msg) => {
   }
   
   if (text === '🎁 Менің промокодым') {
-    // Показываем промокод
     try {
       const user = await getUserById(userId);
       
@@ -1034,10 +1033,13 @@ bot.on('message', async (msg) => {
       const botUsername = 'imantap_bot';
       const referralLink = `https://t.me/${botUsername}?start=ref_${user.promoCode}`;
       
+      // Экранируем подчёркивания для Markdown
+      const escapedLink = referralLink.replace(/_/g, '\\_');
+      
       const message = `🎁 *Сіздің промокодыңыз:*\n\n` +
         `📋 \`${user.promoCode}\`\n\n` +
         `👥 Шақырылғандар: ${user.invitedCount}\n\n` +
-        `${referralLink}\n\n` +
+        `${escapedLink}\n\n` +
         `Достарыңызды шақырыңыз! 🚀`;
       
       bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
