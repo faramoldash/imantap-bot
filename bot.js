@@ -2235,31 +2235,6 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // ✅ API: Глобальный лидерборд (ИСПРАВЛЕННЫЙ)
-    if (url.pathname === '/api/leaderboard/global') {
-      try {
-        const limit = parseInt(url.searchParams.get('limit') || '50');
-        const offset = parseInt(url.searchParams.get('offset') || '0');
-        
-        const allLeaderboard = await getGlobalLeaderboard(limit + offset);
-        const sliced = allLeaderboard.slice(offset, offset + limit);
-        
-        res.statusCode = 200;
-        res.end(JSON.stringify({ 
-          success: true, 
-          data: sliced,
-          total: allLeaderboard.length,
-          hasMore: (offset + limit) < allLeaderboard.length  // ✅ ДОБАВЛЕНО
-        }));
-        return;
-      } catch (error) {
-        console.error('❌ API Error /leaderboard/global:', error);
-        res.statusCode = 500;
-        res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
-        return;
-      }
-    }
-
     // ✅ API: Лидерборд друзей
     if (url.pathname.match(/^\/api\/leaderboard\/friends\/\d+$/)) {
       try {
@@ -2284,35 +2259,6 @@ const server = http.createServer(async (req, res) => {
         return;
       } catch (error) {
         console.error('❌ API Error /leaderboard/friends:', error);
-        res.statusCode = 500;
-        res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
-        return;
-      }
-    }
-
-    // ✅ API: Лидерборд по странам (ИСПРАВЛЕННЫЙ)
-    if (url.pathname === '/api/leaderboard/countries') {
-      try {
-      const country = url.searchParams.get('country');
-      const limit = parseInt(url.searchParams.get('limit') || '50');
-      
-      if (!country) {
-        res.statusCode = 400;
-        res.end(JSON.stringify({ success: false, error: 'country parameter required' }));
-        return;
-      }
-      
-      const leaderboard = await getCountriesLeaderboard(country, limit);
-      
-      res.statusCode = 200;
-      res.end(JSON.stringify({ 
-        success: true, 
-        data: leaderboard,
-        total: leaderboard.length,
-        hasMore: false
-      }));        return;
-      } catch (error) {
-        console.error('❌ API Error /leaderboard/countries:', error);
         res.statusCode = 500;
         res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
         return;
