@@ -119,10 +119,32 @@ async function getCircleDetails(circleId, requesterId) {
     }
     
     // Проверяем что запрашивающий - участник
+    console.log('🔍 Проверка доступа к кругу:', {
+      circleId,
+      requesterId,
+      requesterIdType: typeof requesterId,
+      members: circle.members.map(m => ({ 
+        userId: m.userId, 
+        userIdType: typeof m.userId,
+        status: m.status 
+      }))
+    });
+
     const isMember = circle.members.some(
-      m => m.userId === parseInt(requesterId) && m.status === 'active'
+      m => {
+        const match = (m.userId === parseInt(requesterId) || m.userId === requesterId) && m.status === 'active';
+        console.log('🔍 Сравнение:', {
+          memberUserId: m.userId,
+          requesterId,
+          parsed: parseInt(requesterId),
+          match
+        });
+        return match;
+      }
     );
-    
+
+    console.log('🔍 isMember:', isMember);
+
     if (!isMember) {
       throw new Error('Access denied');
     }
