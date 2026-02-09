@@ -811,12 +811,5 @@ export {
   getFriendsLeaderboard,
   getCountries,
   getCities,
-  getFilteredLeaderboard,
-  createCircle,
-  getUserCircles,
-  getCircleDetails,
-  inviteToCircle,
-  acceptInvite,
-  leaveCircle,
-  deleteCircle
+  getFilteredLeaderboard
 };
