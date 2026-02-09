@@ -933,6 +933,8 @@ async function inviteToCircle(circleId, inviterId, targetUsername) {
     const circles = db.collection('circles');
     const users = db.collection('users');
     
+    console.log('🔍 inviteToCircle called:', { circleId, inviterId, targetUsername });
+    
     // Находим круг
     const circle = await circles.findOne({ circleId });
     
@@ -946,16 +948,52 @@ async function inviteToCircle(circleId, inviterId, targetUsername) {
     }
     
     // Убираем @ если есть
-    const cleanUsername = targetUsername.replace('@', '');
+    const cleanUsername = targetUsername.replace(/^@/, '');
     
-    // Ищем пользователя по username
-    const targetUser = await users.findOne({
-      username: { $regex: new RegExp(`^@?${cleanUsername}$`, 'i') }
+    console.log('🔍 Ищем пользователя:', {
+      original: targetUsername,
+      cleaned: cleanUsername
     });
     
+    // Ищем пользователя разными способами
+    let targetUser = null;
+    
+    // Способ 1: Точное совпадение с @
+    targetUser = await users.findOne({ username: `@${cleanUsername}` });
+    console.log('🔍 Поиск с @:', targetUser ? 'Найден' : 'Не найден');
+    
+    // Способ 2: Точное совпадение без @
     if (!targetUser) {
+      targetUser = await users.findOne({ username: cleanUsername });
+      console.log('🔍 Поиск без @:', targetUser ? 'Найден' : 'Не найден');
+    }
+    
+    // Способ 3: Case-insensitive поиск
+    if (!targetUser) {
+      targetUser = await users.findOne({
+        username: { $regex: new RegExp(`^@?${cleanUsername}$`, 'i') }
+      });
+      console.log('🔍 Regex поиск:', targetUser ? 'Найден' : 'Не найден');
+    }
+    
+    // Способ 4: Поиск по userId (если передан числовой ID)
+    if (!targetUser && !isNaN(targetUsername)) {
+      targetUser = await users.findOne({ userId: parseInt(targetUsername) });
+      console.log('🔍 Поиск по userId:', targetUser ? 'Найден' : 'Не найден');
+    }
+    
+    if (!targetUser) {
+      // Покажем примеры usernames в базе для отладки
+      const sampleUsers = await users.find({}).limit(5).project({ username: 1, userId: 1 }).toArray();
+      console.log('📋 Примеры пользователей в базе:', sampleUsers);
+      
       throw new Error('User not found');
     }
+    
+    console.log('✅ Пользователь найден:', {
+      userId: targetUser.userId,
+      username: targetUser.username
+    });
     
     // Проверяем что пользователь ещё не в круге
     const alreadyMember = circle.members.some(m => m.userId === targetUser.userId);

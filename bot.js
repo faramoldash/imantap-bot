@@ -2432,12 +2432,20 @@ const server = http.createServer(async (req, res) => {
         try {
           const { circleId, inviterId, targetUsername } = JSON.parse(body);
           
+          // ✅ ЛОГИРОВАНИЕ
+          console.log('🔍 INVITE REQUEST:', {
+            circleId,
+            inviterId,
+            targetUsername,
+            targetUsernameType: typeof targetUsername
+          });
+          
           const result = await inviteToCircle(circleId, inviterId, targetUsername);
           
           res.statusCode = 200;
           res.end(JSON.stringify(result));
         } catch (error) {
-          console.error('❌ API Error /circles/invite:', error);
+          console.error('❌ API Error /circles/invite:', error.message);
           res.statusCode = 400;
           res.end(JSON.stringify({ success: false, error: error.message }));
         }
