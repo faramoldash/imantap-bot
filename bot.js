@@ -261,47 +261,58 @@ const RAMADAN_MESSAGES = {
   }
 };
 
-// Функция отправки персонализированных уведомлений
+// ✅ Функция отправки персонализированных уведомлений (с timezone каждого пользователя)
 async function sendPersonalizedRamadanReminder(type) {
   try {
     const db = getDB();
     const users = db.collection('users');
     
-    const now = new Date();
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
-    
     // Находим пользователей с временами намазов
     const activeUsers = await users.find({
       'prayerTimes.fajr': { $exists: true },
-      paymentStatus: { $in: ['paid', 'demo'] }
+      paymentStatus: { $in: ['paid', 'demo'] },
+      'notificationSettings.ramadanReminders': { $ne: false }
     }).toArray();
     
     if (activeUsers.length === 0) return;
     
     let sentCount = 0;
+    let checkedCount = 0;
     
     for (const user of activeUsers) {
       try {
         const prayerTimes = user.prayerTimes;
-        const minutesBefore = 30; // За 30 минут
+        const minutesBefore = 30; // За 30 минут до намаза
         const lang = user.language || 'kk';
+        
+        // ✅ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Используем timezone пользователя
+        const userTimezone = user.location?.timezone || 'Asia/Almaty';
+        const now = new Date();
+        
+        // Получаем ЛОКАЛЬНОЕ время пользователя
+        const userLocalTime = new Date(now.toLocaleString('en-US', { timeZone: userTimezone }));
+        const currentHour = userLocalTime.getHours();
+        const currentMinute = userLocalTime.getMinutes();
+        
+        checkedCount++;
         
         let shouldSend = false;
         let prayerTime = '';
         
-        // Проверяем сухур (Fajr)
+        // Проверяем сухур (за 30 минут до Fajr)
         if (type === 'suhur' && prayerTimes.fajr) {
           const reminderTime = calculateReminderTime(prayerTimes.fajr, minutesBefore);
+          
           if (reminderTime.hour === currentHour && reminderTime.minute === currentMinute) {
             shouldSend = true;
             prayerTime = prayerTimes.fajr;
           }
         }
         
-        // Проверяем ифтар (Maghrib)
+        // Проверяем ифтар (за 30 минут до Maghrib)
         if (type === 'iftar' && prayerTimes.maghrib) {
           const reminderTime = calculateReminderTime(prayerTimes.maghrib, minutesBefore);
+          
           if (reminderTime.hour === currentHour && reminderTime.minute === currentMinute) {
             shouldSend = true;
             prayerTime = prayerTimes.maghrib;
@@ -323,6 +334,8 @@ async function sendPersonalizedRamadanReminder(type) {
             }
           });
           
+          console.log(`📨 ${type} → User ${user.userId} (${userTimezone}, ${currentHour}:${currentMinute.toString().padStart(2, '0')})`);
+          
           sentCount++;
           await new Promise(resolve => setTimeout(resolve, 100));
         }
@@ -332,7 +345,7 @@ async function sendPersonalizedRamadanReminder(type) {
     }
     
     if (sentCount > 0) {
-      console.log(`✅ ${type === 'suhur' ? '🌙 Сухур' : '🌆 Ифтар'} уведомления: ${sentCount} пользователей`);
+      console.log(`✅ ${type === 'suhur' ? '🌙 Сухур' : '🌆 Ифтар'} уведомления: ${sentCount}/${checkedCount} пользователей`);
     }
   } catch (error) {
     console.error('❌ Ошибка уведомлений:', error);
@@ -347,7 +360,7 @@ setInterval(async () => {
   await sendPersonalizedRamadanReminder('iftar');
 }, 60 * 1000);
 
-// ✅ Обновляем времена намазов каждую ночь в 00:00
+// ✅ Обновляем времена намазов каждую ночь в 00:00 UTC
 schedule.scheduleJob('0 0 * * *', async () => {
   console.log('🔄 Обновление времен намазов...');
   
@@ -367,65 +380,69 @@ schedule.scheduleJob('0 0 * * *', async () => {
   console.log(`✅ Обновлено: ${updated}/${allUsers.length} пользователей`);
 });
 
-// 📊 Напоминание отметить прогресс (каждый день в 20:00)
-schedule.scheduleJob('0 20 * * *', async () => {
-  console.log('📊 Проверка прогресса пользователей...');
-  
-  const db = getDB();
-  const users = db.collection('users');
-  
-  const today = new Date().toISOString().split('T')[0];
-  
-  // Пользователи которые не отмечали прогресс сегодня
-  const inactiveUsers = await users.find({
-    paymentStatus: { $in: ['paid', 'demo'] },
-    'notificationSettings.ramadanReminders': { $ne: false },
-    $or: [
-      { lastActiveDate: { $ne: today } },
-      { lastActiveDate: { $exists: false } }
-    ]
-  }).toArray();
-  
-  let sentCount = 0;
-  
-  for (const user of inactiveUsers) {
-    try {
-      const message = user.language === 'kk'
-        ? `📲 *Бүгін әлі ештеңе белгіленбеді!*
-
-Прогрессіңізді белгілеуді ұмытпаңыз! 🌙
-
-Әр белгі — бұл сіздің руханилығыңызға қадам! 💪
-
-Қазір белгілеңіз! 👇`
-        : `📲 *Сегодня еще ничего не отмечено!*
-
-Не забудьте отметить свой прогресс! 🌙
-
-Каждая отметка — это шаг к духовности! 💪
-
-Отметьте сейчас! 👇`;
-      
-      await bot.sendMessage(user.userId, message, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          keyboard: [[{
-            text: '📱 ImanTap ашу',
-            web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${user.userId}` }
-          }]],
-          resize_keyboard: true
+// 📊 Напоминание отметить прогресс (персонализированное по timezone каждого пользователя)
+// Проверка каждый час, отправка каждому в его локальное 20:00
+schedule.scheduleJob('0 * * * *', async () => {  // Каждый час
+  try {
+    const db = getDB();
+    const users = db.collection('users');
+    
+    const today = new Date().toISOString().split('T')[0];
+    
+    // Пользователи с оплаченным доступом
+    const activeUsers = await users.find({
+      paymentStatus: { $in: ['paid', 'demo'] },
+      'notificationSettings.ramadanReminders': { $ne: false },
+      'location.timezone': { $exists: true }
+    }).toArray();
+    
+    let sentCount = 0;
+    
+    for (const user of activeUsers) {
+      try {
+        // Получаем локальное время пользователя
+        const userTimezone = user.location?.timezone || 'Asia/Almaty';
+        const now = new Date();
+        const userLocalTime = new Date(now.toLocaleString('en-US', { timeZone: userTimezone }));
+        const currentHour = userLocalTime.getHours();
+        
+        // Отправляем в 20:00 по местному времени пользователя
+        if (currentHour === 20) {
+          // Проверяем - отмечал ли прогресс сегодня
+          const hasProgressToday = user.lastActiveDate === today;
+          
+          if (!hasProgressToday) {
+            const message = user.language === 'kk'
+              ? `📲 *Бүгін әлі ештеңе белгіленбеді!*\n\nПрогрессіңізді белгілеуді ұмытпаңыз! 🌙\n\nӘр белгі — бұл сіздің рухани дамуыңызға қадам! 💪\n\n👇 Қазір белгілеңіз!`
+              : `📲 *Сегодня еще ничего не отмечено!*\n\nНе забудьте отметить свой прогресс! 🌙\n\nКаждая отметка — это шаг к духовности! 💪\n\n👇 Отметьте сейчас!`;
+            
+            await bot.sendMessage(user.userId, message, {
+              parse_mode: 'Markdown',
+              reply_markup: {
+                keyboard: [[{
+                  text: '📱 ImanTap ашу',
+                  web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${user.userId}` }
+                }]],
+                resize_keyboard: true
+              }
+            });
+            
+            console.log(`📊 Напоминание → User ${user.userId} (${userTimezone}, ${currentHour}:00)`);
+            
+            sentCount++;
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
         }
-      });
-      
-      sentCount++;
-      await new Promise(resolve => setTimeout(resolve, 100));
-    } catch (error) {
-      console.error(`❌ Напоминание ${user.userId}:`, error.message);
+      } catch (error) {
+        console.error(`❌ Напоминание ${user.userId}:`, error.message);
+      }
     }
-  }
-  
-  if (sentCount > 0) {
-    console.log(`✅ Напоминания о прогрессе: ${sentCount} пользователей`);
+    
+    if (sentCount > 0) {
+      console.log(`✅ Напоминания о прогрессе: ${sentCount} пользователей`);
+    }
+  } catch (error) {
+    console.error('❌ Ошибка напоминаний:', error);
   }
 });
 
