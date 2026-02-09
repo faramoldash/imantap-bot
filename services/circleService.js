@@ -207,14 +207,40 @@ async function inviteToCircle(circleId, inviterId, targetUsername) {
       throw new Error('Circle is full');
     }
     
-    // Ищем пользователя по username
-    const targetUser = await users.findOne({ 
-      username: targetUsername.replace('@', '')
+    // Ищем пользователя по username (с @ и без)
+    const cleanUsername = targetUsername.replace('@', '');
+
+    console.log('🔍 Ищем пользователя:', {
+      original: targetUsername,
+      cleaned: cleanUsername
     });
-    
+
+    // Пробуем найти с @
+    let targetUser = await users.findOne({ username: `@${cleanUsername}` });
+
+    // Если не нашли - пробуем без @
     if (!targetUser) {
+      targetUser = await users.findOne({ username: cleanUsername });
+    }
+
+    // Если не нашли - пробуем case-insensitive
+    if (!targetUser) {
+      targetUser = await users.findOne({
+        username: { $regex: new RegExp(`^@?${cleanUsername}$`, 'i') }
+      });
+    }
+
+    if (!targetUser) {
+      // Покажем примеры для отладки
+      const samples = await users.find({}).limit(3).project({ username: 1, userId: 1 }).toArray();
+      console.log('❌ Пользователь не найден. Примеры в базе:', samples);
       throw new Error('User not found');
     }
+
+    console.log('✅ Пользователь найден:', {
+      userId: targetUser.userId,
+      username: targetUser.username
+    });
     
     // Проверяем не состоит ли уже
     const alreadyMember = circle.members.some(
