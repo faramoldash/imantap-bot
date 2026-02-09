@@ -47,6 +47,13 @@ import {
   clearSession
 } from './sessionManager.js';
 import schedule from 'node-schedule';
+import { 
+  createCircle, 
+  getUserCircles, 
+  getCircleDetails,
+  inviteToCircle,
+  acceptInvite
+} from './services/circleService.js';
 
 // Экранирование специальных символов для Markdown
 function escapeMarkdown(text) {
@@ -2348,6 +2355,118 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
         return;
       }
+    }
+
+    // API: Создать круг
+    if (url.pathname === '/api/circles/create' && req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => { body += chunk.toString(); });
+      
+      req.on('end', async () => {
+        try {
+          const { userId, name, description } = JSON.parse(body);
+          
+          const result = await createCircle(userId, name, description);
+          
+          res.statusCode = 200;
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          console.error('❌ API Error /circles/create:', error);
+          res.statusCode = 400;
+          res.end(JSON.stringify({ success: false, error: error.message }));
+        }
+      });
+      
+      return;
+    }
+
+    // API: Получить круги пользователя
+    if (url.pathname.match(/^\/api\/circles\/user\/\d+$/)) {
+      try {
+        const userId = url.pathname.split('/')[4];
+        
+        const circles = await getUserCircles(userId);
+        
+        res.statusCode = 200;
+        res.end(JSON.stringify({ success: true, data: circles }));
+      } catch (error) {
+        console.error('❌ API Error /circles/user:', error);
+        res.statusCode = 500;
+        res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
+      }
+      
+      return;
+    }
+
+    // API: Получить детали круга с прогрессом
+    if (url.pathname.startsWith('/api/circles/') && url.pathname.endsWith('/details')) {
+      try {
+        const circleId = url.pathname.split('/')[3];
+        const userId = url.searchParams.get('userId');
+        
+        if (!userId) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ success: false, error: 'userId required' }));
+          return;
+        }
+        
+        const details = await getCircleDetails(circleId, userId);
+        
+        res.statusCode = 200;
+        res.end(JSON.stringify({ success: true, data: details }));
+      } catch (error) {
+        console.error('❌ API Error /circles/details:', error);
+        res.statusCode = 500;
+        res.end(JSON.stringify({ success: false, error: error.message }));
+      }
+      
+      return;
+    }
+
+    // API: Пригласить пользователя
+    if (url.pathname === '/api/circles/invite' && req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => { body += chunk.toString(); });
+      
+      req.on('end', async () => {
+        try {
+          const { circleId, inviterId, targetUsername } = JSON.parse(body);
+          
+          const result = await inviteToCircle(circleId, inviterId, targetUsername);
+          
+          res.statusCode = 200;
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          console.error('❌ API Error /circles/invite:', error);
+          res.statusCode = 400;
+          res.end(JSON.stringify({ success: false, error: error.message }));
+        }
+      });
+      
+      return;
+    }
+
+    // API: Принять приглашение
+    if (url.pathname === '/api/circles/accept' && req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => { body += chunk.toString(); });
+      
+      req.on('end', async () => {
+        try {
+          const { circleId, userId } = JSON.parse(body);
+          
+          const result = await acceptInvite(circleId, userId);
+          
+          res.statusCode = 200;
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          console.error('❌ API Error /circles/accept:', error);
+          res.statusCode = 400;
+          res.end(JSON.stringify({ success: false, error: error.message }));
+        }
+      });
+      
+      return;
     }
 
     // 404 для всех остальных путей
