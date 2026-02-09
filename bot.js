@@ -918,13 +918,28 @@ bot.on('location', async (msg) => {
       
       console.log(`🌍 User ${userId}: (${latitude}, ${longitude}) → ${city}, ${country} | ${timezone}`);
       
+      // ✅ Нормализуем название страны перед сохранением
+      const countryNormalization = {
+        'Қазақстан': 'Kazakhstan',
+        'Ресей': 'Russia',
+        'Россия': 'Russia',
+        'Түркия': 'Turkey',
+        'Турция': 'Turkey',
+        'Өзбекстан': 'Uzbekistan',
+        'Узбекистан': 'Uzbekistan',
+        'Қырғызстан': 'Kyrgyzstan',
+        'Кыргызстан': 'Kyrgyzstan'
+      };
+
+      const normalizedCountry = countryNormalization[country] || country;
+
       await updateUserOnboarding(userId, {
         location: { 
           city, 
-          country, 
+          country: normalizedCountry,
           latitude, 
-          longitude,
-          timezone
+          longitude, 
+          timezone 
         }
       });
       

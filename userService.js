@@ -684,7 +684,24 @@ async function getCountries() {
       onboardingCompleted: true
     });
     
-    return countries.filter(c => c && c !== 'Unknown').sort();
+    // ✅ Нормализация к английским названиям
+    const countryNormalization = {
+      'Қазақстан': 'Kazakhstan',
+      'Ресей': 'Russia',
+      'Россия': 'Russia',
+      'Түркия': 'Turkey',
+      'Турция': 'Turkey',
+      'Өзбекстан': 'Uzbekistan',
+      'Узбекистан': 'Uzbekistan'
+    };
+    
+    const normalized = countries
+      .map(country => countryNormalization[country] || country)
+      .filter(c => c && c !== 'Unknown');
+    
+    const unique = [...new Set(normalized)];
+    
+    return unique.sort();
   } catch (error) {
     console.error('❌ Ошибка получения стран:', error);
     return [];
