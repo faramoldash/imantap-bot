@@ -649,7 +649,7 @@ bot.on('callback_query', async (query) => {
       if (user.referredBy) {
         const inviter = await getUserByPromoCode(user.referredBy);
         if (inviter) {
-          await incrementReferralCount(inviter.userId);
+          await incrementReferralCount(user.referredBy);  // ✅ ПРАВИЛЬНО - передаём промокод (строка)
           
           // ✅ НАЧИСЛЯЕМ +400 XP ПРИГЛАСИВШЕМУ
           await addUserXP(inviter.userId, 400, `Реферал: пользователь ${targetUserId} купил доступ`);
