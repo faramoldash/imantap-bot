@@ -88,18 +88,28 @@ async function createCircle(ownerId, name, description = '') {
  */
 async function getUserCircles(userId) {
   try {
-    const db = getDB();
+    const db = await getDB();
     const circles = db.collection('circles');
     
-    const userCircles = await circles.find({
-      'members.userId': parseInt(userId),
-      'members.status': 'active'
+    // Получаем все круги где пользователь есть в members
+    const allCircles = await circles.find({
+      'members.userId': parseInt(userId)
     }).toArray();
     
-    return userCircles;
+    // Фильтруем только активные и pending (исключаем left и declined)
+    const activeCircles = allCircles.filter(circle => {
+      const member = circle.members.find(m => 
+        m.userId === parseInt(userId) || m.userId === userId
+      );
+      return member && (member.status === 'active' || member.status === 'pending');
+    });
+    
+    console.log(`✅ Найдено кругов для userId ${userId}: ${activeCircles.length}`);
+    
+    return activeCircles;
   } catch (error) {
     console.error('❌ Ошибка получения кругов:', error);
-    throw error;
+    return [];
   }
 }
 
