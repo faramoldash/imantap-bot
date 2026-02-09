@@ -2266,74 +2266,74 @@ const server = http.createServer(async (req, res) => {
     }
 
     // API: Получить список стран
-if (url.pathname === '/api/countries') {
-  try {
-    const countries = await getCountries();
-    res.statusCode = 200;
-    res.end(JSON.stringify({ 
-      success: true, 
-      data: countries 
-    }));
-    return;
-  } catch (error) {
-    console.error('❌ API Error /countries:', error);
-    res.statusCode = 500;
-    res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
-    return;
-  }
-}
-
-// API: Получить список городов в стране
-if (url.pathname.startsWith('/api/cities/')) {
-  try {
-    const country = decodeURIComponent(url.pathname.split('/')[3]);
-    
-    if (!country) {
-      res.statusCode = 400;
-      res.end(JSON.stringify({ success: false, error: 'Country required' }));
-      return;
+    if (url.pathname === '/api/countries') {
+      try {
+        const countries = await getCountries();
+        res.statusCode = 200;
+        res.end(JSON.stringify({ 
+          success: true, 
+          data: countries 
+        }));
+        return;
+      } catch (error) {
+        console.error('❌ API Error /countries:', error);
+        res.statusCode = 500;
+        res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
+        return;
+      }
     }
-    
-    const cities = await getCities(country);
-    res.statusCode = 200;
-    res.end(JSON.stringify({ 
-      success: true, 
-      data: cities 
-    }));
-    return;
-  } catch (error) {
-    console.error('❌ API Error /cities:', error);
-    res.statusCode = 500;
-    res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
-    return;
-  }
-}
 
-// API: Лидерборд с фильтрами (обновлённый /api/leaderboard/global)
-if (url.pathname === '/api/leaderboard/global') {
-  try {
-    const limit = parseInt(url.searchParams.get('limit')) || 50;
-    const offset = parseInt(url.searchParams.get('offset')) || 0;
-    const country = url.searchParams.get('country') || null;
-    const city = url.searchParams.get('city') || null;
-    
-    const result = await getFilteredLeaderboard({ limit, offset, country, city });
-    
-    res.statusCode = 200;
-    res.end(JSON.stringify({ 
-      success: true, 
-      data: result.data,
-      total: result.total,
-      hasMore: result.hasMore
-    }));
-    return;
-  } catch (error) {
-    console.error('❌ API Error /leaderboard/global:', error);
-    res.statusCode = 500;
-    res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
-    return;
-  }
-}
+    // API: Получить список городов в стране
+    if (url.pathname.startsWith('/api/cities/')) {
+      try {
+        const country = decodeURIComponent(url.pathname.split('/')[3]);
+        
+        if (!country) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ success: false, error: 'Country required' }));
+          return;
+        }
+        
+        const cities = await getCities(country);
+        res.statusCode = 200;
+        res.end(JSON.stringify({ 
+          success: true, 
+          data: cities 
+        }));
+        return;
+      } catch (error) {
+        console.error('❌ API Error /cities:', error);
+        res.statusCode = 500;
+        res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
+        return;
+      }
+    }
+
+    // API: Лидерборд с фильтрами (обновлённый /api/leaderboard/global)
+    if (url.pathname === '/api/leaderboard/global') {
+      try {
+        const limit = parseInt(url.searchParams.get('limit')) || 50;
+        const offset = parseInt(url.searchParams.get('offset')) || 0;
+        const country = url.searchParams.get('country') || null;
+        const city = url.searchParams.get('city') || null;
+        
+        const result = await getFilteredLeaderboard({ limit, offset, country, city });
+        
+        res.statusCode = 200;
+        res.end(JSON.stringify({ 
+          success: true, 
+          data: result.data,
+          total: result.total,
+          hasMore: result.hasMore
+        }));
+        return;
+      } catch (error) {
+        console.error('❌ API Error /leaderboard/global:', error);
+        res.statusCode = 500;
+        res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
+        return;
+      }
+    }
 
     // 404 для всех остальных путей
     res.statusCode = 404;
