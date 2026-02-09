@@ -298,12 +298,21 @@ async function inviteToCircle(circleId, inviterId, targetUsername) {
     
     console.log(`✅ Приглашение отправлено: ${targetUsername} → ${circle.name}`);
     
-    return { success: true };
+    // ✅ ИЗМЕНИТЬ: Возвращаем данные для отправки уведомления
+    return { 
+      success: true,
+      targetUserId: targetUser.userId,
+      circleName: circle.name,
+      circleDescription: circle.description,
+      memberCount: circle.members.filter(m => m.status === 'active').length,
+      inviterUsername: circle.members.find(m => m.userId === parseInt(inviterId))?.username || 'Someone'
+    };
   } catch (error) {
     console.error('❌ Ошибка приглашения:', error);
     throw error;
   }
 }
+
 
 /**
  * Принять приглашение

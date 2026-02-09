@@ -2434,15 +2434,44 @@ const server = http.createServer(async (req, res) => {
         try {
           const { circleId, inviterId, targetUsername } = JSON.parse(body);
           
-          // ✅ ЛОГИРОВАНИЕ
           console.log('🔍 INVITE REQUEST:', {
             circleId,
             inviterId,
-            targetUsername,
-            targetUsernameType: typeof targetUsername
+            targetUsername
           });
           
           const result = await inviteToCircle(circleId, inviterId, targetUsername);
+          
+          // ✅ ДОБАВИТЬ: Отправка уведомления в Telegram
+          if (result.success && result.targetUserId) {
+            try {
+              const miniAppUrl = `https://t.me/${process.env.BOT_USERNAME}/${process.env.MINI_APP_NAME}`;
+              
+              const message = 
+                `👋 <b>${result.inviterUsername}</b> сізді топқа шақырды!\n\n` +
+                `🤝 <b>${result.circleName}</b>\n` +
+                (result.circleDescription ? `📝 ${result.circleDescription}\n` : '') +
+                `👥 ${result.memberCount} мүше\n\n` +
+                `Шақыруды қабылдау үшін mini app ашыңыз 👇`;
+
+              await bot.sendMessage(result.targetUserId, message, {
+                parse_mode: 'HTML',
+                reply_markup: {
+                  inline_keyboard: [[
+                    {
+                      text: '✅ Mini app ашу',
+                      url: miniAppUrl
+                    }
+                  ]]
+                }
+              });
+              
+              console.log(`📬 Уведомление отправлено пользователю ${result.targetUserId}`);
+            } catch (notifyError) {
+              console.error('❌ Ошибка отправки уведомления:', notifyError.message);
+              // Не прерываем выполнение если уведомление не отправилось
+            }
+          }
           
           res.statusCode = 200;
           res.end(JSON.stringify(result));
