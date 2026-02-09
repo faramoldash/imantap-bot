@@ -55,7 +55,9 @@ import {
   acceptInvite,
   declineInvite,
   joinByCode,
-  leaveCircle
+  leaveCircle,
+  removeMember,
+  deleteCircle
 } from './services/circleService.js';
 
 // Экранирование специальных символов для Markdown
@@ -2525,6 +2527,56 @@ const server = http.createServer(async (req, res) => {
           res.end(JSON.stringify(result));
         } catch (error) {
           console.error('❌ API Error /circles/leave:', error.message);
+          res.statusCode = 400;
+          res.end(JSON.stringify({ success: false, error: error.message }));
+        }
+      });
+      
+      return;
+    }
+
+    // API: Удалить участника из круга
+    if (url.pathname === '/api/circles/remove-member' && req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => { body += chunk.toString(); });
+      
+      req.on('end', async () => {
+        try {
+          const { circleId, ownerId, targetUserId } = JSON.parse(body);
+          
+          console.log('🔍 REMOVE MEMBER REQUEST:', { circleId, ownerId, targetUserId });
+          
+          const result = await removeMember(circleId, ownerId, targetUserId);
+          
+          res.statusCode = 200;
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          console.error('❌ API Error /circles/remove-member:', error.message);
+          res.statusCode = 400;
+          res.end(JSON.stringify({ success: false, error: error.message }));
+        }
+      });
+      
+      return;
+    }
+
+    // API: Удалить круг
+    if (url.pathname === '/api/circles/delete' && req.method === 'POST') {
+      let body = '';
+      req.on('data', chunk => { body += chunk.toString(); });
+      
+      req.on('end', async () => {
+        try {
+          const { circleId, ownerId } = JSON.parse(body);
+          
+          console.log('🔍 DELETE CIRCLE REQUEST:', { circleId, ownerId });
+          
+          const result = await deleteCircle(circleId, ownerId);
+          
+          res.statusCode = 200;
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          console.error('❌ API Error /circles/delete:', error.message);
           res.statusCode = 400;
           res.end(JSON.stringify({ success: false, error: error.message }));
         }

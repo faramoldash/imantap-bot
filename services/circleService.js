@@ -531,6 +531,94 @@ async function leaveCircle(circleId, userId) {
   }
 }
 
+// Удалить участника из круга (kick)
+async function removeMember(circleId, ownerId, targetUserId) {
+  try {
+    const db = await getDB();
+    const circles = db.collection('circles');
+    
+    console.log(`🗑️ Попытка удаления участника: ownerId=${ownerId}, targetUserId=${targetUserId}, circleId=${circleId}`);
+    
+    // Получаем круг
+    const circle = await circles.findOne({ circleId });
+    
+    if (!circle) {
+      throw new Error('Circle not found');
+    }
+    
+    // Проверяем что запрашивающий - владелец
+    if (circle.ownerId !== parseInt(ownerId)) {
+      throw new Error('Only owner can remove members');
+    }
+    
+    // Нельзя удалить самого себя
+    if (parseInt(targetUserId) === parseInt(ownerId)) {
+      throw new Error('Cannot remove yourself. Delete the circle instead.');
+    }
+    
+    // Находим участника
+    const memberIndex = circle.members.findIndex(
+      m => (m.userId === parseInt(targetUserId) || m.userId === targetUserId)
+    );
+    
+    if (memberIndex === -1) {
+      throw new Error('Member not found');
+    }
+    
+    // Меняем статус на 'removed'
+    await circles.updateOne(
+      { circleId },
+      { 
+        $set: { 
+          [`members.${memberIndex}.status`]: 'removed',
+          [`members.${memberIndex}.removedAt`]: new Date()
+        } 
+      }
+    );
+    
+    console.log(`✅ Участник ${targetUserId} удален из круга ${circleId}`);
+    
+    return { success: true };
+  } catch (error) {
+    console.error('❌ Ошибка удаления участника:', error);
+    throw error;
+  }
+}
+
+
+// Удалить круг полностью
+async function deleteCircle(circleId, ownerId) {
+  try {
+    const db = await getDB();
+    const circles = db.collection('circles');
+    
+    console.log(`🗑️ Попытка удаления круга: ownerId=${ownerId}, circleId=${circleId}`);
+    
+    // Получаем круг
+    const circle = await circles.findOne({ circleId });
+    
+    if (!circle) {
+      throw new Error('Circle not found');
+    }
+    
+    // Проверяем что запрашивающий - владелец
+    if (circle.ownerId !== parseInt(ownerId)) {
+      throw new Error('Only owner can delete the circle');
+    }
+    
+    // Удаляем круг
+    await circles.deleteOne({ circleId });
+    
+    console.log(`✅ Круг ${circleId} удален`);
+    
+    return { success: true };
+  } catch (error) {
+    console.error('❌ Ошибка удаления круга:', error);
+    throw error;
+  }
+}
+
+
 export {
   createCircle,
   getUserCircles,
@@ -539,5 +627,7 @@ export {
   acceptInvite,
   declineInvite,
   joinByCode,
-  leaveCircle
+  leaveCircle,
+  removeMember,
+  deleteCircle
 };
