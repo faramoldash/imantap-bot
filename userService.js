@@ -240,7 +240,7 @@ async function getUserFullData(userId) {
       name: user.name,
       photoUrl: user.photoUrl,
       startDate: user.startDate,
-      registrationDate: user.registrationDate,
+      registrationDate: user.createdAt || user.registrationDate,
       progress: user.progress || {},
       preparationProgress: user.preparationProgress || {},  // ✅ ДОБАВЬТЕ
       basicProgress: user.basicProgress || {},  // ✅ ДОБАВЬТЕ
