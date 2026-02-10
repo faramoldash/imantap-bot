@@ -162,9 +162,43 @@ async function getCircleDetails(circleId, requesterId) {
     }
     
     // Получаем прогресс каждого участника за сегодня
-    const today = new Date().toISOString().split('T')[0];
-    const todayKey = `day_${Math.floor((new Date() - new Date('2026-02-19')) / (1000 * 60 * 60 * 24)) + 1}`;
-    
+    const almatyOffset = 5 * 60; // +5 часов в минутах
+    const now = new Date();
+    const almatyTime = new Date(now.getTime() + (almatyOffset + now.getTimezoneOffset()) * 60000);
+    const today = almatyTime.toISOString().split('T')[0];
+
+    // Правильный расчет текущего дня с учетом Almaty timezone
+    const ramadanStart = new Date('2026-02-19T00:00:00+05:00');
+    const preparationStart = new Date('2026-02-09T00:00:00+05:00');
+
+    const isRamadanStarted = almatyTime >= ramadanStart;
+    const isPreparationStarted = almatyTime >= preparationStart;
+
+    let currentDayNumber;
+    if (isRamadanStarted) {
+      // Рамадан начался - считаем дни Рамадана
+      const daysSinceRamadan = Math.floor((almatyTime - ramadanStart) / (1000 * 60 * 60 * 24));
+      currentDayNumber = Math.max(1, Math.min(daysSinceRamadan + 1, 30));
+    } else if (isPreparationStarted) {
+      // Подготовка - считаем дни подготовки
+      const daysSincePrep = Math.floor((almatyTime - preparationStart) / (1000 * 60 * 60 * 24));
+      currentDayNumber = Math.max(1, Math.min(daysSincePrep + 1, 10));
+    } else {
+      // До подготовки
+      currentDayNumber = 1;
+    }
+
+    const todayKey = `day_${currentDayNumber}`;
+
+    console.log('📅 ТЕКУЩАЯ ДАТА:', {
+      almatyTime: almatyTime.toISOString(),
+      today,
+      isRamadanStarted,
+      isPreparationStarted,
+      currentDayNumber,
+      todayKey
+    });
+
     const membersWithProgress = await Promise.all(
       circle.members
         .filter(m => m.status === 'active')
@@ -178,10 +212,9 @@ async function getCircleDetails(circleId, requesterId) {
           const ramadanProgress = user.progress || {};
           
           // Определяем какой прогресс показывать
-          const isRamadanStarted = new Date() >= new Date('2026-02-19');
           const dailyProgress = isRamadanStarted 
             ? ramadanProgress[todayKey] || {}
-            : prepProgress[1] || {};  // Пока показываем день 1 подготовки
+            : prepProgress[todayKey] || {};
           
           // Считаем процент выполнения
           const tasks = ['fasting', 'fajr', 'duha', 'dhuhr', 'asr', 'maghrib', 'isha', 'quranRead', 'morningDhikr', 'eveningDhikr'];
