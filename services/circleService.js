@@ -214,7 +214,7 @@ async function getCircleDetails(circleId, requesterId) {
           // Определяем какой прогресс показывать
           const dailyProgress = isRamadanStarted 
             ? ramadanProgress[todayKey] || {}
-            : prepProgress[todayKey] || {};
+            : prepProgress[currentDayNumber] || {};
           
           // Считаем процент выполнения
           const tasks = ['fasting', 'fajr', 'duha', 'dhuhr', 'asr', 'maghrib', 'isha', 'quranRead', 'morningDhikr', 'eveningDhikr'];
