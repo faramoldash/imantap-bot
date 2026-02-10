@@ -2497,6 +2497,43 @@ const server = http.createServer(async (req, res) => {
           const { circleId, userId } = JSON.parse(body);
           
           const result = await acceptInvite(circleId, userId);
+
+          // ✅ ДОБАВИТЬ: Уведомление владельцу о принятии приглашения
+          if (result.success) {
+            try {
+              const db = await getDB();
+              const circles = db.collection('circles');
+              const users = db.collection('users');
+              
+              const circle = await circles.findOne({ circleId });
+              const acceptingUser = await users.findOne({ userId: parseInt(userId) });
+              
+              if (circle && acceptingUser) {
+                const miniAppUrl = `https://t.me/${process.env.BOT_USERNAME}/${process.env.MINI_APP_NAME}`;
+                
+                const message = 
+                  `✅ <b>Приглашение принято!</b>\n\n` +
+                  `👤 <b>${acceptingUser.name}</b> присоединился к кругу <b>"${circle.name}"</b>\n\n` +
+                  `👥 Теперь участников: ${circle.members.filter(m => m.status === 'active').length}`;
+                
+                await bot.sendMessage(circle.ownerId, message, {
+                  parse_mode: 'HTML',
+                  reply_markup: {
+                    inline_keyboard: [[
+                      {
+                        text: '👀 Открыть круг',
+                        url: miniAppUrl
+                      }
+                    ]]
+                  }
+                });
+                
+                console.log(`📬 Уведомление о принятии приглашения отправлено владельцу ${circle.ownerId}`);
+              }
+            } catch (notifyError) {
+              console.error('❌ Ошибка отправки уведомления:', notifyError.message);
+            }
+          }
           
           res.statusCode = 200;
           res.end(JSON.stringify(result));
@@ -2522,6 +2559,43 @@ const server = http.createServer(async (req, res) => {
           console.log('🔍 LEAVE REQUEST:', { circleId, userId });
           
           const result = await leaveCircle(circleId, userId);
+
+          // ✅ ДОБАВИТЬ: Уведомление владельцу о выходе участника
+          if (result.success) {
+            try {
+              const db = await getDB();
+              const circles = db.collection('circles');
+              const users = db.collection('users');
+              
+              const circle = await circles.findOne({ circleId });
+              const leavingUser = await users.findOne({ userId: parseInt(userId) });
+              
+              if (circle && leavingUser) {
+                const miniAppUrl = `https://t.me/${process.env.BOT_USERNAME}/${process.env.MINI_APP_NAME}`;
+                
+                const message = 
+                  `🚪 <b>Участник вышел из круга</b>\n\n` +
+                  `👤 <b>${leavingUser.name}</b> покинул круг <b>"${circle.name}"</b>\n\n` +
+                  `👥 Осталось участников: ${circle.members.filter(m => m.status === 'active').length}`;
+                
+                await bot.sendMessage(circle.ownerId, message, {
+                  parse_mode: 'HTML',
+                  reply_markup: {
+                    inline_keyboard: [[
+                      {
+                        text: '👀 Открыть круг',
+                        url: miniAppUrl
+                      }
+                    ]]
+                  }
+                });
+                
+                console.log(`📬 Уведомление о выходе отправлено владельцу ${circle.ownerId}`);
+              }
+            } catch (notifyError) {
+              console.error('❌ Ошибка отправки уведомления:', notifyError.message);
+            }
+          }
           
           res.statusCode = 200;
           res.end(JSON.stringify(result));
@@ -2547,6 +2621,31 @@ const server = http.createServer(async (req, res) => {
           console.log('🔍 REMOVE MEMBER REQUEST:', { circleId, ownerId, targetUserId });
           
           const result = await removeMember(circleId, ownerId, targetUserId);
+
+          // ✅ ДОБАВИТЬ: Уведомление удаленному участнику
+          if (result.success) {
+            try {
+              const db = await getDB();
+              const circles = db.collection('circles');
+              
+              const circle = await circles.findOne({ circleId });
+              
+              if (circle) {
+                const message = 
+                  `❌ <b>Вы удалены из круга</b>\n\n` +
+                  `Владелец удалил вас из круга <b>"${circle.name}"</b>\n\n` +
+                  `Вы больше не являетесь участником этого круга.`;
+                
+                await bot.sendMessage(parseInt(targetUserId), message, {
+                  parse_mode: 'HTML'
+                });
+                
+                console.log(`📬 Уведомление об удалении отправлено пользователю ${targetUserId}`);
+              }
+            } catch (notifyError) {
+              console.error('❌ Ошибка отправки уведомления:', notifyError.message);
+            }
+          }
           
           res.statusCode = 200;
           res.end(JSON.stringify(result));
@@ -2620,6 +2719,33 @@ const server = http.createServer(async (req, res) => {
           console.log('🔗 JOIN REQUEST:', { inviteCode, userId });
           
           const result = await joinByCode(inviteCode, userId);
+
+          // ✅ ДОБАВИТЬ: Уведомление владельцу о новом участнике
+          try {
+            const joiningUser = await db.collection('users').findOne({ userId: parseInt(userId) });
+            const miniAppUrl = `https://t.me/${process.env.BOT_USERNAME}/${process.env.MINI_APP_NAME}`;
+            
+            const message = 
+              `🎉 <b>Новый участник в круге!</b>\n\n` +
+              `👤 <b>${joiningUser?.name || 'Пользователь'}</b> присоединился к кругу <b>"${updatedCircle.name}"</b>\n\n` +
+              `👥 Теперь участников: ${updatedCircle.members.filter(m => m.status === 'active').length}`;
+            
+            await bot.sendMessage(updatedCircle.ownerId, message, {
+              parse_mode: 'HTML',
+              reply_markup: {
+                inline_keyboard: [[
+                  {
+                    text: '👀 Открыть круг',
+                    url: miniAppUrl
+                  }
+                ]]
+              }
+            });
+            
+            console.log(`📬 Уведомление о присоединении отправлено владельцу ${updatedCircle.ownerId}`);
+          } catch (notifyError) {
+            console.error('❌ Ошибка отправки уведомления:', notifyError.message);
+          }
           
           res.statusCode = 200;
           res.end(JSON.stringify(result));
