@@ -2512,16 +2512,16 @@ const server = http.createServer(async (req, res) => {
                 const miniAppUrl = `https://t.me/${process.env.BOT_USERNAME}/${process.env.MINI_APP_NAME}`;
                 
                 const message = 
-                  `✅ <b>Приглашение принято!</b>\n\n` +
-                  `👤 <b>${acceptingUser.name}</b> присоединился к кругу <b>"${circle.name}"</b>\n\n` +
-                  `👥 Теперь участников: ${circle.members.filter(m => m.status === 'active').length}`;
+                  `✅ <b>Шақыру қабылданды!</b>\n\n` +
+                  `👤 <b>${acceptingUser.name}</b> <b>"${circle.name}"</b> тобына қосылды\n\n` +
+                  `👥 Қазір қатысушылар: ${circle.members.filter(m => m.status === 'active').length}`;
                 
                 await bot.sendMessage(circle.ownerId, message, {
                   parse_mode: 'HTML',
                   reply_markup: {
                     inline_keyboard: [[
                       {
-                        text: '👀 Открыть круг',
+                        text: '👀 Топты ашу',
                         url: miniAppUrl
                       }
                     ]]
@@ -2574,16 +2574,16 @@ const server = http.createServer(async (req, res) => {
                 const miniAppUrl = `https://t.me/${process.env.BOT_USERNAME}/${process.env.MINI_APP_NAME}`;
                 
                 const message = 
-                  `🚪 <b>Участник вышел из круга</b>\n\n` +
-                  `👤 <b>${leavingUser.name}</b> покинул круг <b>"${circle.name}"</b>\n\n` +
-                  `👥 Осталось участников: ${circle.members.filter(m => m.status === 'active').length}`;
+                  `🚪 <b>Қатысушы топтан шықты</b>\n\n` +
+                  `👤 <b>${leavingUser.name}</b> <b>"${circle.name}"</b> тобынан шықты\n\n` +
+                  `👥 Қалған қатысушылар: ${circle.members.filter(m => m.status === 'active').length}`;
                 
                 await bot.sendMessage(circle.ownerId, message, {
                   parse_mode: 'HTML',
                   reply_markup: {
                     inline_keyboard: [[
                       {
-                        text: '👀 Открыть круг',
+                        text: '👀 Топты ашу',
                         url: miniAppUrl
                       }
                     ]]
@@ -2632,9 +2632,9 @@ const server = http.createServer(async (req, res) => {
               
               if (circle) {
                 const message = 
-                  `❌ <b>Вы удалены из круга</b>\n\n` +
-                  `Владелец удалил вас из круга <b>"${circle.name}"</b>\n\n` +
-                  `Вы больше не являетесь участником этого круга.`;
+                  `❌ <b>Сіз топтан шығарылдыңыз</b>\n\n` +
+                  `Иесі сізді <b>"${circle.name}"</b> тобынан шығарды\n\n` +
+                  `Сіз бұл топтың қатысушысы емессіз.`;
                 
                 await bot.sendMessage(parseInt(targetUserId), message, {
                   parse_mode: 'HTML'
@@ -2726,16 +2726,16 @@ const server = http.createServer(async (req, res) => {
             const miniAppUrl = `https://t.me/${process.env.BOT_USERNAME}/${process.env.MINI_APP_NAME}`;
             
             const message = 
-              `🎉 <b>Новый участник в круге!</b>\n\n` +
-              `👤 <b>${joiningUser?.name || 'Пользователь'}</b> присоединился к кругу <b>"${updatedCircle.name}"</b>\n\n` +
-              `👥 Теперь участников: ${updatedCircle.members.filter(m => m.status === 'active').length}`;
+              `🎉 <b>Топқа жаңа адам қосылды!</b>\n\n` +
+              `👤 <b>${joiningUser?.name || 'қатысушы'}</b> <b>"${updatedCircle.name}"</b> тобына қосылды\n\n` +
+              `👥 Қазір қатысушылар: ${updatedCircle.members.filter(m => m.status === 'active').length}`;
             
             await bot.sendMessage(updatedCircle.ownerId, message, {
               parse_mode: 'HTML',
               reply_markup: {
                 inline_keyboard: [[
                   {
-                    text: '👀 Открыть круг',
+                    text: '👀 Топты ашу',
                     url: miniAppUrl
                   }
                 ]]
