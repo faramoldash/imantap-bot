@@ -217,7 +217,30 @@ async function getCircleDetails(circleId, requesterId) {
             : prepProgress[currentDayNumber] || {};
           
           // Считаем процент выполнения
-          const tasks = ['fasting', 'fajr', 'duha', 'dhuhr', 'asr', 'maghrib', 'isha', 'quranRead', 'morningDhikr', 'eveningDhikr'];
+          // Определяем список задач в зависимости от периода
+          let tasks;
+          if (isRamadanStarted) {
+            // Задачи Рамадана (10 задач)
+            tasks = ['fasting', 'fajr', 'duha', 'dhuhr', 'asr', 'maghrib', 'isha', 'quranRead', 'morningDhikr', 'eveningDhikr'];
+          } else {
+            // Задачи подготовки - базовые (12 задач)
+            tasks = [
+              'fajr', 'duha', 'dhuhr', 'asr', 'maghrib', 'isha',
+              'morningDhikr', 'eveningDhikr', 'quranRead', 
+              'salawat', 'hadith', 'charity'
+            ];
+            
+            // Добавляем условные задачи подготовки
+            const dayOfWeek = almatyTime.getDay();
+            const isMondayOrThursday = dayOfWeek === 1 || dayOfWeek === 4;
+            
+            // Дата первого таравиха
+            const firstTaraweehDate = new Date('2026-02-18T00:00:00+05:00');
+            const isFirstTaraweehDay = almatyTime.toDateString() === firstTaraweehDate.toDateString();
+            
+            if (isMondayOrThursday) tasks.push('fasting');
+            if (isFirstTaraweehDay) tasks.push('taraweeh');
+          }
           const completed = tasks.filter(task => dailyProgress[task]).length;
           const progressPercent = Math.round((completed / tasks.length) * 100);
           
