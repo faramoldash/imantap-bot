@@ -15,10 +15,7 @@ const client = new MongoClient(connectionString, {
   minPoolSize: 5,
   maxIdleTimeMS: 30000,
   retryWrites: true,
-  retryReads: true,
-  tls: true,
-  tlsAllowInvalidCertificates: true,
-  tlsAllowInvalidHostnames: true
+  retryReads: true
 });
 
 let db;
