@@ -16,6 +16,7 @@ const client = new MongoClient(connectionString, {
   maxIdleTimeMS: 30000, // Закрывать неактивные соединения через 30с
   retryWrites: true,
   retryReads: true});
+  tlsAllowInvalidCertificates: true
 
 let db;
 
