@@ -62,6 +62,9 @@ async function getOrCreateUser(userId, username = null) {
       receiptPhotoId: null,
       receiptMessageId: null,
       paymentDate: null,
+      subscriptionExpiresAt: null, // ✅ НОВОЕ: Дата окончания подписки
+      subscriptionNotified3Days: false, // ✅ НОВОЕ: Флаг уведомления за 3 дня
+      subscriptionNotified1Day: false,  // ✅ НОВОЕ: Флаг уведомления за 1 день
       
       // Доступ
       accessType: null,
@@ -261,7 +264,9 @@ async function getUserFullData(userId) {
       unlockedBadges: user.unlockedBadges || [],
       currentStreak: user.currentStreak || 0,  // ✅ ДОБАВЬТЕ
       longestStreak: user.longestStreak || 0,  // ✅ ДОБАВЬТЕ
-      lastActiveDate: user.lastActiveDate || ''  // ✅ ДОБАВЬТЕ
+      lastActiveDate: user.lastActiveDate || '',  // ✅ ДОБАВЬТЕ
+      subscriptionExpiresAt: user.subscriptionExpiresAt || null, // ✅ ДОБАВЛЕНО
+      daysLeft: user.subscriptionExpiresAt ? Math.ceil((new Date(user.subscriptionExpiresAt) - new Date()) / (1000 * 60 * 60 * 24)) : null // ✅ ДОБАВЛЕНО
     };
   } catch (error) {
     console.error('❌ getUserFullData ошибка:', error);
@@ -357,10 +362,17 @@ async function approvePayment(userId) {
   
   const user = await users.findOne({ userId });
   
+  // ✅ ПОДПИСКА НА 90 ДНЕЙ
+  const subscriptionExpiresAt = new Date();
+  subscriptionExpiresAt.setDate(subscriptionExpiresAt.getDate() + 90);
+  
   const updateData = {
     paymentStatus: 'paid',
     accessType: 'full',
     paymentDate: new Date(),
+    subscriptionExpiresAt: subscriptionExpiresAt, // ✅ НОВОЕ
+    subscriptionNotified3Days: false, // ✅ Сбрасываем флаги уведомлений
+    subscriptionNotified1Day: false,  // ✅ Сбрасываем флаги уведомлений
     onboardingCompleted: true,
     updatedAt: new Date()
   };
@@ -372,6 +384,7 @@ async function approvePayment(userId) {
   }
   
   console.log(`✅ Оплата подтверждена для пользователя ${userId}`);
+  console.log(`📅 Подписка активна до: ${subscriptionExpiresAt.toLocaleDateString('ru-RU')}`);
   
   return true;
 }
@@ -468,11 +481,38 @@ async function getUserAccess(userId) {
     }
   }
   
-  // Оплата подтверждена
+  // ✅ ПРОВЕРКА ПОДПИСКИ (90 дней)
   if (user.paymentStatus === 'paid') {
+    // Если есть subscriptionExpiresAt - проверяем истекла ли подписка
+    if (user.subscriptionExpiresAt) {
+      const now = new Date();
+      const expiresAt = new Date(user.subscriptionExpiresAt);
+      
+      if (now < expiresAt) {
+        // Подписка активна
+        const daysLeft = Math.ceil((expiresAt - now) / (1000 * 60 * 60 * 24));
+        return { 
+          hasAccess: true, 
+          paymentStatus: 'paid', 
+          subscriptionExpires: user.subscriptionExpiresAt,
+          daysLeft: daysLeft
+        };
+      } else {
+        // Подписка истекла
+        return { 
+          hasAccess: false, 
+          paymentStatus: 'subscription_expired', 
+          reason: 'Подписка истекла',
+          subscriptionExpired: true
+        };
+      }
+    }
+    
+    // ✅ Старые пользователи без subscriptionExpiresAt - даём доступ (обратная совместимость)
     return { 
       hasAccess: true, 
-      paymentStatus: 'paid'
+      paymentStatus: 'paid',
+      reason: 'legacy_user'
     };
   }
   
@@ -482,6 +522,15 @@ async function getUserAccess(userId) {
       hasAccess: false, 
       paymentStatus: 'pending',
       reason: 'payment_pending'
+    };
+  }
+  
+  // Подписка истекла (отдельный статус)
+  if (user.paymentStatus === 'subscription_expired') {
+    return { 
+      hasAccess: false, 
+      paymentStatus: 'subscription_expired',
+      reason: 'subscription_expired'
     };
   }
   
