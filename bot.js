@@ -84,6 +84,11 @@ function escapeMarkdown(text) {
     .replace(/\!/g, '\\!');
 }
 
+// Форматирование цены с пробелом для тысяч (2490 → 2 490)
+function formatPrice(price) {
+  return price.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+}
+
 
 // ✅ Функция определения города по координатам с User-Agent
 async function getCityFromCoordinates(latitude, longitude) {
