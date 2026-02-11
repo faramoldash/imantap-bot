@@ -892,26 +892,27 @@ bot.on('callback_query', async (query) => {
         }
       );
 
-      // Начисляем реферальный бонус (если есть)
+      // Начисляем дополнительный бонус за оплату реферала
       const user = await getUserById(targetUserId);
       if (user.referredBy) {
         const inviter = await getUserByPromoCode(user.referredBy);
         if (inviter) {
-          await incrementReferralCount(user.referredBy);  // ✅ ПРАВИЛЬНО - передаём промокод (строка)
+          // ✅ +400 XP за оплату (дополнительно к 100 XP при регистрации)
+          await addUserXP(inviter.userId, 400, `Реферал: ${user.name || user.username || targetUserId} купил доступ`);
           
-          // ✅ НАЧИСЛЯЕМ +400 XP ПРИГЛАСИВШЕМУ
-          await addUserXP(inviter.userId, 400, `Реферал: пользователь ${targetUserId} купил доступ`);
+          console.log(`💰 Реферал оплатил подписку: ${user.referredBy} → userId ${targetUserId}`);
           
-          console.log(`🎉 Реферал засчитан для промокода: ${user.referredBy}`);
-          
-          await bot.sendMessage(
-            inviter.userId,
-            `🎁 *Жаңа реферал!*\n\n` +
-            `Сіздің досыңыз төлем жасады!\n` +
-            `🎯 Сіз алдыңыз: +400 XP\n\n` +
-            `Барлық рефералдар: ${inviter.invitedCount + 1} 🔥`,
-            { parse_mode: 'Markdown' }
-          );
+          try {
+            await bot.sendMessage(
+              inviter.userId,
+              `🎁 *+400 XP!*\n\n` +
+              `Сіздің досыңыз *${user.name || user.username || 'қолданушы'}* төлем жасады!\n\n` +
+              `💰 Сіз барлығы алдыңыз: 500 XP (100 + 400)`,
+              { parse_mode: 'Markdown' }
+            );
+          } catch (e) {
+            console.error('❌ Ошибка уведомления рефереру:', e.message);
+          }
         }
       }
 
@@ -1077,6 +1078,43 @@ async function showPayment(chatId, userId, price, hasDiscount) {
   try {
     const kaspiLink = process.env.KASPI_LINK || 'https://pay.kaspi.kz/pay/ygtke7vw';
     const user = await getUserById(userId);
+
+    // ✅ НАЧИСЛЯЕМ РЕФЕРАЛЬНЫЙ БОНУС ПОСЛЕ ЗАВЕРШЕНИЯ ОНБОРДИНГА (ОДИН РАЗ)
+    if (user.referredBy && !user.referralBonusGiven) {
+      const inviter = await getUserByPromoCode(user.referredBy);
+      if (inviter) {
+        // Увеличиваем счётчик рефералов
+        await incrementReferralCount(user.referredBy);
+        
+        // Начисляем +100 XP обоим
+        await addUserXP(userId, 100, 'Регистрация по реферальной ссылке');
+        await addUserXP(inviter.userId, 100, `Реферал: ${user.name || user.username || 'Жаңа қолданушы'} зарегистрировался`);
+        
+        // Получаем обновлённые данные рефера (после incrementReferralCount)
+        const updatedInviter = await getUserById(inviter.userId);
+        
+        // Отправляем уведомление рефереру
+        try {
+          await bot.sendMessage(
+            inviter.userId,
+            `🎉 *Жаңа реферал!*\n\n` +
+            `👤 *${user.name || user.username || 'Жаңа қолданушы'}* сіздің промокодыңыз бойынша тіркелді!\n` +
+            `🎯 Сіз алдыңыз: +100 XP\n\n` +
+            `Барлық рефералдар: ${updatedInviter.invitedCount} 🔥`,
+            { parse_mode: 'Markdown' }
+          );
+          console.log(`🎉 Реферальный бонус начислен: ${user.referredBy} → userId ${userId}`);
+        } catch (e) {
+          console.error('❌ Ошибка отправки уведомления рефереру:', e.message);
+        }
+        
+        // Отмечаем что бонус уже начислен
+        await updateUserOnboarding(userId, {
+          referralBonusGiven: true
+        });
+      }
+    }
+
     let messageText;
     let inlineKeyboard;
 
@@ -1149,7 +1187,7 @@ Kaspi арқылы төлем жасап, чекті осында жіберің
     }
 
     await bot.sendMessage(chatId, messageText, {
-      parse_mode: 'HTML',  // ✅ HTML вместо Markdown
+      parse_mode: 'HTML',
       reply_markup: { inline_keyboard: inlineKeyboard },
       remove_keyboard: true
     });
@@ -1521,6 +1559,27 @@ bot.on('message', async (msg) => {
     
     // Если написали что-то другое - считаем что это промокод
     const promoCode = text.toUpperCase().trim();
+
+    // ✅ ПРОВЕРКА: уже использовал промокод?
+    const user = await getUserById(userId);
+    if (user.usedPromoCode || user.referredBy) {
+      await bot.sendMessage(
+        chatId,
+        `❌ *Промокод қолдану мүмкін емес*\n\n` +
+        `Сіз бұрын промокод қолдандыңыз: *${user.usedPromoCode || user.referredBy}*\n\n` +
+        `Бір қолданушы тек бір промокод қолдана алады.`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            keyboard: [['❌ Артқа қайту']],
+            resize_keyboard: true,
+            one_time_keyboard: true
+          }
+        }
+      );
+      return;
+    }
+
     const check = await checkPromoCode(promoCode, userId);
     
     if (check.valid) {
@@ -1569,6 +1628,27 @@ bot.on('message', async (msg) => {
     }
     
     const promoCode = text.toUpperCase().trim();
+
+    // ✅ ПРОВЕРКА: уже использовал промокод?
+    const user = await getUserById(userId);
+    if (user.usedPromoCode || user.referredBy) {
+      await bot.sendMessage(
+        chatId,
+        `❌ *Промокод қолдану мүмкін емес*\n\n` +
+        `Сіз бұрын промокод қолдандыңыз: *${user.usedPromoCode || user.referredBy}*\n\n` +
+        `Бір қолданушы тек бір промокод қолдана алады.`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            keyboard: [['❌ Артқа қайту']],
+            resize_keyboard: true,
+            one_time_keyboard: true
+          }
+        }
+      );
+      return;
+    }
+
     const check = await checkPromoCode(promoCode, userId);
     
     if (check.valid) {
@@ -1645,6 +1725,25 @@ bot.on('message', async (msg) => {
     }
     
     const user = await getUserById(userId);
+
+    // ✅ ПРОВЕРКА: уже использовал промокод?
+    if (user.usedPromoCode || user.referredBy) {
+      await bot.sendMessage(
+        chatId,
+        `❌ *Промокод қолдану мүмкін емес*\n\n` +
+        `Сіз бұрын промокод қолдандыңыз: *${user.usedPromoCode || user.referredBy}*\n\n` +
+        `Бір қолданушы тек бір промокод қолдана алады.`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            keyboard: [['❌ Артқа қайту']],
+            resize_keyboard: true,
+            one_time_keyboard: true
+          }
+        }
+      );
+      return;
+    }
     
     // Проверяем что это не свой промокод
     if (promoCode === user.promoCode) {
@@ -2047,44 +2146,23 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       const inviter = await getUserByPromoCode(referralCode);
 
       if (inviter) {
-        // Сохраняем реферал
+        // Сохраняем реферал и применяем скидку
         await updateUserOnboarding(userId, {
           referredBy: referralCode,
           hasDiscount: true
         });
         
-        // ✅ НАЧИСЛЯЕМ +100 XP ОБОИМ
-        try {
-          await addUserXP(userId, 100, 'Регистрация по реферальной ссылке');
-          await addUserXP(inviter.userId, 100, `Реферал: пользователь ${userId} зарегистрировался`);
-        } catch (error) {
-          console.error('❌ Ошибка начисления XP при регистрации:', error);
-        }
+        // Реферальный бонус будет начислен ПОСЛЕ завершения онбординга
+        console.log(`🎯 Реферал начал онбординг: userId ${userId} → промокод ${referralCode}`);
         
         bot.sendMessage(
           chatId,
           `🎁 *Сізде реферал сілтемесі бар!*\n\n` +
           `Досыңыз сізді шақырды.\n` +
           `Сіз -500₸ жеңілдік аласыз!\n\n` +
-          `🎯 Сіз алдыңыз: +100 XP\n` +
-          `🎯 Досыңыз алды: +100 XP\n\n` +
           `Баптауды бастайық! 🚀`,
           { parse_mode: 'Markdown' }
         );
-        
-        // Уведомляем пригласившего
-        try {
-          await bot.sendMessage(
-            inviter.userId,
-            `🎉 *Жаңа реферал!*\n\n` +
-            `Сіздің промокодыңыз бойынша тіркелді!\n` +
-            `🎯 Сіз алдыңыз: +100 XP\n\n` +
-            `Барлық рефералдар: ${inviter.invitedCount + 1} 🔥`,
-            { parse_mode: 'Markdown' }
-          );
-        } catch (e) {
-          // Пользователь мог заблокировать бота
-        }
       }
     }
 
