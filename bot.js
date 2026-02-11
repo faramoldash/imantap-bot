@@ -2171,6 +2171,40 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       }
     }
 
+    // 🔥 ПАРАМЕТР PAYMENT - открыть экран оплаты из Mini App
+    if (param === 'payment') {
+      // Если уже оплатил - говорим об этом
+      if (user.paymentStatus === 'paid') {
+        await bot.sendMessage(
+          chatId,
+          `✅ Сізде қазірдің өзінде Premium бар!\n\n` +
+          `Mini App-ты ашыңыз:`,
+          {
+            reply_markup: {
+              keyboard: [
+                [{ 
+                  text: '📱 ImanTap ашу', 
+                  web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
+                }],
+                ['⚙️ Баптаулар', '📊 Статистика'],
+                ['🎁 Менің промокодым']
+              ],
+              resize_keyboard: true
+            }
+          }
+        );
+        return;
+      }
+      
+      // Определяем цену
+      const price = (user.hasDiscount || user.referredBy || user.usedPromoCode) ? 1990 : 2490;
+      const hasDiscount = !!(user.hasDiscount || user.referredBy || user.usedPromoCode);
+      
+      // Показываем экран оплаты
+      await showPayment(chatId, userId, price, hasDiscount);
+      return;
+    }
+
     // 🔥 ПРОВЕРКА 3: Определяем с какого шага начать онбординг
     
     // Если НЕТ телефона - начинаем с телефона
