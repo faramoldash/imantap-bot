@@ -11,12 +11,15 @@ if (!connectionString) {
 
 const client = new MongoClient(connectionString, {
   serverSelectionTimeoutMS: 5000,
-  maxPoolSize: 50, // Увеличено для production
-  minPoolSize: 5,  // Минимальный размер пула
-  maxIdleTimeMS: 30000, // Закрывать неактивные соединения через 30с
+  maxPoolSize: 50,
+  minPoolSize: 5,
+  maxIdleTimeMS: 30000,
   retryWrites: true,
-  retryReads: true});
-  tlsAllowInvalidCertificates: true
+  retryReads: true,
+  tls: true,
+  tlsAllowInvalidCertificates: true,
+  tlsAllowInvalidHostnames: true
+});
 
 let db;
 
