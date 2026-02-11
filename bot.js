@@ -616,6 +616,32 @@ bot.on('callback_query', async (query) => {
   }
 
   // ==========================================
+  // Обработка кнопки "Промокод енгізу" из Paywall
+  // ==========================================
+  if (data === 'enter_promo_code') {
+    await bot.answerCallbackQuery(query.id);
+    
+    await bot.sendMessage(
+      chatId,
+      `🎁 *Промокод енгізу*\n\n` +
+      `Достарыңыздың промокодын жазыңыз.\n` +
+      `(6 символ, мысалы: ABC123)\n\n` +
+      `Промокодпен -500₸ жеңілдік аласыз! 🎉`,
+      { 
+        parse_mode: 'Markdown',
+        reply_markup: {
+          keyboard: [['❌ Артқа қайту']],
+          resize_keyboard: true,
+          one_time_keyboard: true
+        }
+      }
+    );
+    
+    setState(userId, 'ENTERING_PROMO_FROM_PAYWALL');
+    return;
+  }
+
+  // ==========================================
   // Проверка прав для админских действий
   // ==========================================
   const hasAccess = await isAdmin(userId);
@@ -854,42 +880,89 @@ async function requestPromoCode(chatId, userId) {
 }
 
 async function showPayment(chatId, userId, price, hasDiscount) {
-  const kaspiLink = process.env.KASPI_LINK || 'https://kaspi.kz/pay/imantap';
-
-  const discountText = hasDiscount 
-    ? `~~2490₸~~ → *${price}₸* 🎁\n` 
-    : `*${price}₸*\n`;
-
-  await bot.sendMessage(
-    chatId,
-    `💳 *Imantap Premium-ға қолжетімділік*\n\n` +
-    `Бағасы — ${discountText}\n` +
-    `✓ Рамазанның 30 күніне арналған трекер\n` +
-    `✓ Алланың 99 есімі\n` +
-    `✓ Құранды пара бойынша оқу\n` +
-    `✓ Марапаттар мен XP жүйесі\n` +
-    `✓ Лидерборд\n\n` +
-    `Kaspi арқылы төлем жасап, чекті осында жіберіңіз.`,
-    {
+  try {
+    const kaspiLink = process.env.KASPI_LINK || 'https://pay.kaspi.kz/pay/ygtke7vw';
+    const user = await getUserById(userId);
+    
+    let messageText = '';
+    let inlineKeyboard = [];
+    
+    // ✅ СЦЕНАРИЙ 1: Есть РЕФЕРАЛ (пришёл по ссылке)
+    if (user.referredBy && hasDiscount) {
+      messageText = 
+        `💳 *Imantap Premium-ға қолжетімділік*\n\n` +
+        `🎉 Сізге *${user.referredBy}* промокоды арқылы жеңілдік берілді!\n\n` +
+        `Бағасы: ~~2490₸~~ → *${price}₸* 🎁\n\n` +
+        `✓ Рамазанның 30 күніне арналған трекер\n` +
+        `✓ Алланың 99 есімі\n` +
+        `✓ Құранды пара бойынша оқу\n` +
+        `✓ Марапаттар мен XP жүйесі\n` +
+        `✓ Лидерборд\n\n` +
+        `Kaspi арқылы төлем жасап, чекті осында жіберіңіз.`;
+      
+      inlineKeyboard = [
+        [{ text: '💳 Kaspi арқылы төлем', url: kaspiLink }],
+        [{ text: '📄 Менде чек бар', callback_data: 'have_receipt' }]
+      ];
+    } 
+    // ✅ СЦЕНАРИЙ 2: Промокод применён ВРУЧНУЮ
+    else if (user.usedPromoCode && hasDiscount) {
+      messageText = 
+        `💳 *Imantap Premium-ға қолжетімділік*\n\n` +
+        `🎉 Промокод қолданылды: *${user.usedPromoCode}*\n\n` +
+        `Бағасы: ~~2490₸~~ → *${price}₸* 🎁\n\n` +
+        `✓ Рамазанның 30 күніне арналған трекер\n` +
+        `✓ Алланың 99 есімі\n` +
+        `✓ Құранды пара бойынша оқу\n` +
+        `✓ Марапаттар мен XP жүйесі\n` +
+        `✓ Лидерборд\n\n` +
+        `Kaspi арқылы төлем жасап, чекті осында жіберіңіз.`;
+      
+      inlineKeyboard = [
+        [{ text: '💳 Kaspi арқылы төлем', url: kaspiLink }],
+        [{ text: '📄 Менде чек бар', callback_data: 'have_receipt' }]
+      ];
+    }
+    // ✅ СЦЕНАРИЙ 3: ОБЫЧНЫЙ пользователь БЕЗ скидки
+    else {
+      messageText = 
+        `💳 *Imantap Premium-ға қолжетімділік*\n\n` +
+        `Бағасы: *${price}₸*\n\n` +
+        `✓ Рамазанның 30 күніне арналған трекер\n` +
+        `✓ Алланың 99 есімі\n` +
+        `✓ Құранды пара бойынша оқу\n` +
+        `✓ Марапаттар мен XP жүйесі\n` +
+        `✓ Лидерборд\n\n` +
+        `Kaspi арқылы төлем жасап, чекті осында жіберіңіз.`;
+      
+      inlineKeyboard = [
+        [{ text: '💳 Kaspi арқылы төлем', url: kaspiLink }],
+        [{ text: '🎁 Промокод енгізу', callback_data: 'enter_promo_code' }], // ✅ Кнопка промокода
+        [{ text: '📄 Менде чек бар', callback_data: 'have_receipt' }]
+      ];
+    }
+    
+    await bot.sendMessage(chatId, messageText, {
       parse_mode: 'Markdown',
       reply_markup: {
-        inline_keyboard: [
-          [{ text: '💳 Kaspi арқылы төлем', url: kaspiLink }],
-          [{ text: '📄 Менде чек бар', callback_data: 'have_receipt' }]
-        ],
+        inline_keyboard: inlineKeyboard,
         remove_keyboard: true
       }
-    }
-  );
+    });
 
-  // Сохраняем данные оплаты
-  await updateUserOnboarding(userId, {
-    paidAmount: price,
-    hasDiscount: hasDiscount,
-    paymentStatus: 'unpaid'
-  });
+    // Сохраняем данные оплаты
+    await updateUserOnboarding(userId, {
+      paidAmount: price,
+      hasDiscount: hasDiscount,
+      paymentStatus: 'unpaid'
+    });
 
-  setState(userId, 'WAITING_RECEIPT');
+    setState(userId, 'WAITING_RECEIPT');
+    
+  } catch (error) {
+    console.error('❌ Ошибка showPayment:', error);
+    await bot.sendMessage(chatId, '❌ Қате орын алды. Қайталап көріңіз.');
+  }
 }
 
 // =====================================================
@@ -1337,6 +1410,129 @@ bot.on('message', async (msg) => {
     
     return;
   }
+
+  // 🎟️ ВВОД ПРОМОКОДА ИЗ PAYWALL (инлайн кнопка)
+  if (state === 'ENTERING_PROMO_FROM_PAYWALL') {
+    if (text === '❌ Артқа қайту') {
+      // Возвращаемся к экрану оплаты
+      const user = await getUserById(userId);
+      const price = user?.hasDiscount ? 1990 : 2490;
+      await showPayment(chatId, userId, price, user?.hasDiscount || false);
+      clearState(userId);
+      return;
+    }
+    
+    const promoCode = text.toUpperCase().trim();
+    
+    // Проверяем длину
+    if (promoCode.length !== 6) {
+      await bot.sendMessage(
+        chatId, 
+        '⚠️ Промокод 6 символдан тұруы керек!\n\nҚайта енгізіңіз:',
+        {
+          reply_markup: {
+            keyboard: [['❌ Артқа қайту']],
+            resize_keyboard: true,
+            one_time_keyboard: true
+          }
+        }
+      );
+      return;
+    }
+    
+    const user = await getUserById(userId);
+    
+    // Проверяем что это не свой промокод
+    if (promoCode === user.promoCode) {
+      await bot.sendMessage(
+        chatId,
+        '❌ Өз промокодыңызды пайдалануға болмайды!\n\nҚайта енгізіңіз:',
+        {
+          reply_markup: {
+            keyboard: [['❌ Артқа қайту']],
+            resize_keyboard: true,
+            one_time_keyboard: true
+          }
+        }
+      );
+      return;
+    }
+    
+    // Проверяем промокод
+    const check = await checkPromoCode(promoCode, userId);
+    
+    if (check.valid) {
+      const newPrice = 1990;
+      
+      // ✅ ПРИМЕНЯЕМ ПРОМОКОД
+      await updateUserOnboarding(userId, {
+        usedPromoCode: promoCode,
+        hasDiscount: true,
+        paidAmount: newPrice
+      });
+      
+      await markPromoCodeAsUsed(promoCode, userId);
+      
+      // Начисляем XP обоим
+      await addUserXP(userId, 100, 'Использован промокод');
+      await addUserXP(check.owner.userId, 100, `Промокод использован пользователем ${userId}`);
+      
+      await bot.sendMessage(
+        chatId,
+        `✅ *Промокод қабылданды!*\n\n` +
+        `🎉 Сізге жеңілдік берілді!\n` +
+        `Бағасы: ~~2490₸~~ → *${newPrice}₸*\n\n` +
+        `🎯 Сіз алдыңыз: +100 XP\n` +
+        `🎯 Досыңыз алды: +100 XP`,
+        { parse_mode: 'Markdown' }
+      );
+      
+      // Показываем оплату со скидкой
+      await showPayment(chatId, userId, newPrice, true);
+      
+      // Уведомляем владельца промокода
+      try {
+        await bot.sendMessage(
+          check.owner.userId,
+          `🎉 *Промокод пайдаланылды!*\n\n` +
+          `Сіздің *${promoCode}* промокодыңыз қолданылды!\n` +
+          `🎯 +100 XP алдыңыз! 🔥`,
+          { parse_mode: 'Markdown' }
+        );
+      } catch (e) {
+        console.log('⚠️ Не удалось уведомить владельца промокода');
+      }
+      
+      clearState(userId);
+      
+    } else {
+      // Промокод невалидный
+      let errorMsg = '❌ *Промокод қате*\n\n';
+      
+      if (check.reason === 'not_found') {
+        errorMsg += 'Бұл промокод табылмады.';
+      } else if (check.reason === 'already_used') {
+        errorMsg += 'Бұл промокод қолданылған.';
+      } else if (check.reason === 'own_code') {
+        errorMsg += 'Өз промокодыңызды қолдануға болмайды.';
+      } else if (check.reason === 'owner_not_paid') {
+        errorMsg += 'Промокод иесі төлем жасамаған.';
+      }
+      
+      errorMsg += '\n\nҚайта енгізіңіз немесе артқа қайтыңыз:';
+      
+      await bot.sendMessage(chatId, errorMsg, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          keyboard: [['❌ Артқа қайту']],
+          resize_keyboard: true,
+          one_time_keyboard: true
+        }
+      });
+    }
+    
+    return;
+  }
 });
 
 // =====================================================
@@ -1624,7 +1820,8 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       if (inviter) {
         // Сохраняем реферал
         await updateUserOnboarding(userId, {
-          referredBy: referralCode
+          referredBy: referralCode,
+          hasDiscount: true
         });
         
         // ✅ НАЧИСЛЯЕМ +100 XP ОБОИМ
