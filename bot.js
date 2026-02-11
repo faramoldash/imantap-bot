@@ -458,8 +458,165 @@ schedule.scheduleJob('0 * * * *', async () => {  // Каждый час
 });
 
 console.log('✅ Напоминание о прогрессе настроено (20:00)\n');
-
 console.log('✅ Автообновление времен настроено (00:00)\n');
+
+// 🔔 Проверка истекающих подписок (каждый день в 10:00 UTC)
+schedule.scheduleJob('0 10 * * *', async () => {
+  console.log('🔔 Проверка истекающих подписок...');
+  
+  try {
+    const db = getDB();
+    const users = db.collection('users');
+    const now = new Date();
+    
+    // ===== ПОДПИСКИ, ИСТЕКАЮЩИЕ ЧЕРЕЗ 3 ДНЯ =====
+    const in3Days = new Date(now);
+    in3Days.setDate(in3Days.getDate() + 3);
+    const in3DaysPlus1 = new Date(in3Days);
+    in3DaysPlus1.setHours(23, 59, 59, 999);
+    
+    const expiring3Days = await users.find({
+      paymentStatus: 'paid',
+      subscriptionExpiresAt: { 
+        $gte: in3Days, 
+        $lte: in3DaysPlus1
+      },
+      subscriptionNotified3Days: { $ne: true }
+    }).toArray();
+    
+    for (const user of expiring3Days) {
+      try {
+        const expiresAt = new Date(user.subscriptionExpiresAt);
+        const daysLeft = Math.ceil((expiresAt - now) / (1000 * 60 * 60 * 24));
+        
+        await bot.sendMessage(
+          user.userId,
+          `⏰ *Жазылым мерзімі аяқталуда*\n\n` +
+          `Сіздің жазылымыңыз *${daysLeft} күннен* кейін аяқталады.\n\n` +
+          `📅 Аяқталу күні: ${expiresAt.toLocaleDateString('kk-KZ')}\n\n` +
+          `💡 Жазылымды жаңарту үшін төмендегі батырманы басыңыз:`,
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [[
+                { text: '🔄 Жазылымды жаңарту', callback_data: 'renew_subscription' }
+              ]]
+            }
+          }
+        );
+        
+        await users.updateOne(
+          { userId: user.userId },
+          { $set: { subscriptionNotified3Days: true } }
+        );
+        
+        console.log(`📨 3-дневное уведомление → userId ${user.userId}`);
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (error) {
+        console.error(`❌ Ошибка уведомления userId ${user.userId}:`, error.message);
+      }
+    }
+    
+    // ===== ПОДПИСКИ, ИСТЕКАЮЩИЕ ЧЕРЕЗ 1 ДЕНЬ =====
+    const in1Day = new Date(now);
+    in1Day.setDate(in1Day.getDate() + 1);
+    const in1DayPlus1 = new Date(in1Day);
+    in1DayPlus1.setHours(23, 59, 59, 999);
+    
+    const expiring1Day = await users.find({
+      paymentStatus: 'paid',
+      subscriptionExpiresAt: { 
+        $gte: in1Day, 
+        $lte: in1DayPlus1
+      },
+      subscriptionNotified1Day: { $ne: true }
+    }).toArray();
+    
+    for (const user of expiring1Day) {
+      try {
+        const expiresAt = new Date(user.subscriptionExpiresAt);
+        const hoursLeft = Math.ceil((expiresAt - now) / (1000 * 60 * 60));
+        
+        await bot.sendMessage(
+          user.userId,
+          `⚠️ *Жазылым ертең аяқталады!*\n\n` +
+          `Сіздің жазылымыңыз *${hoursLeft} сағаттан* кейін аяқталады.\n\n` +
+          `📅 Аяқталу уақыты: ${expiresAt.toLocaleString('kk-KZ')}\n\n` +
+          `⚡ Қолжетімділікті жоғалтпау үшін жаңартыңыз:`,
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [[
+                { text: '🔄 Жазылымды жаңарту', callback_data: 'renew_subscription' }
+              ]]
+            }
+          }
+        );
+        
+        await users.updateOne(
+          { userId: user.userId },
+          { $set: { subscriptionNotified1Day: true } }
+        );
+        
+        console.log(`📨 1-дневное уведомление → userId ${user.userId}`);
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (error) {
+        console.error(`❌ Ошибка уведомления userId ${user.userId}:`, error.message);
+      }
+    }
+    
+    // ===== ИСТЕКШИЕ ПОДПИСКИ (закрываем доступ) =====
+    const expired = await users.find({
+      paymentStatus: 'paid',
+      subscriptionExpiresAt: { $lt: now }
+    }).toArray();
+    
+    for (const user of expired) {
+      try {
+        // Закрываем доступ
+        await users.updateOne(
+          { userId: user.userId },
+          { 
+            $set: { 
+              paymentStatus: 'subscription_expired',
+              accessType: null,
+              updatedAt: new Date()
+            } 
+          }
+        );
+        
+        // Уведомляем пользователя
+        await bot.sendMessage(
+          user.userId,
+          `❌ *Жазылым мерзімі аяқталды*\n\n` +
+          `Сіздің 90 күндік жазылымыңыз аяқталды.\n\n` +
+          `📅 Аяқталған күн: ${new Date(user.subscriptionExpiresAt).toLocaleDateString('kk-KZ')}\n\n` +
+          `🔄 Қолжетімділікті жалғастыру үшін жаңартыңыз:`,
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [[
+                { text: '🔄 Жазылымды жаңарту', callback_data: 'renew_subscription' }
+              ]]
+            }
+          }
+        );
+        
+        console.log(`❌ Подписка истекла → userId ${user.userId}`);
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (error) {
+        console.error(`❌ Ошибка закрытия доступа userId ${user.userId}:`, error.message);
+      }
+    }
+    
+    console.log(`✅ Проверка завершена: ${expiring3Days.length} за 3 дня, ${expiring1Day.length} за 1 день, ${expired.length} истекло`);
+    
+  } catch (error) {
+    console.error('❌ Ошибка проверки подписок:', error);
+  }
+});
+
+console.log('✅ Система проверки подписок настроена (10:00 UTC)\n');
 
 // =====================================================
 // 🎯 ОБРАБОТКА ВСЕХ CALLBACK КНОПОК
@@ -642,6 +799,43 @@ bot.on('callback_query', async (query) => {
   }
 
   // ==========================================
+  // Обработка кнопки "Промокод енгізу" из Paywall
+  // ==========================================
+  if (data === 'enter_promo_code') {
+    // ... существующий код
+    return;
+  }
+
+  // ==========================================
+  // Обработка кнопки "Жазылымды жаңарту"
+  // ==========================================
+  if (data === 'renew_subscription') {
+    await bot.answerCallbackQuery(query.id);
+    
+    const user = await getUserById(userId);
+    
+    if (!user) {
+      await bot.sendMessage(chatId, '❌ Пайдаланушы табылмады. /start басыңыз');
+      return;
+    }
+    
+    // Определяем цену (если был промокод/реферал - та же цена)
+    const price = (user.hasDiscount || user.referredBy || user.usedPromoCode) ? 1990 : 2490;
+    const hasDiscount = !!(user.hasDiscount || user.referredBy || user.usedPromoCode);
+    
+    await bot.sendMessage(
+      chatId,
+      `🔄 *Жазылымды жаңарту*\n\n` +
+      `Төлем жасағаннан кейін жазылым тағы 90 күнге жаңартылады.\n\n` +
+      `Бағасы: *${price}₸*`,
+      { parse_mode: 'Markdown' }
+    );
+    
+    await showPayment(chatId, userId, price, hasDiscount);
+    return;
+  }
+
+  // ==========================================
   // Проверка прав для админских действий
   // ==========================================
   const hasAccess = await isAdmin(userId);
@@ -793,8 +987,8 @@ async function startOnboarding(chatId, userId, firstName) {
   await bot.sendMessage(
     chatId,
     `🌙 *Ассаляму Алейкум, ${firstName}!*\n\n` +
-    `Imantap-қа қош келдіңіз — Рамазанға арналған жеке көмекшіңіз.\n\n` +
-    `Барлығын 2 минутта баптаймыз! 🚀`,
+    `ImanTap-қа қош келдіңіз! Жақсы амалдарды жоспарлауға арналған жеке көмекшіңіз.\n\n` +
+    `Барлығын 30 секундта баптаймыз! 🚀`,
     { parse_mode: 'Markdown' }
   );
 
@@ -890,14 +1084,16 @@ async function showPayment(chatId, userId, price, hasDiscount) {
     // ✅ СЦЕНАРИЙ 1: Есть РЕФЕРАЛ (пришёл по ссылке)
     if (user.referredBy && hasDiscount) {
       messageText = 
-        `💳 *Imantap Premium-ға қолжетімділік*\n\n` +
+        `💳 *ImanTap Premium-ға қолжетімділік*\n\n` +
         `🎉 Сізге *${user.referredBy}* промокоды арқылы жеңілдік берілді!\n\n` +
         `Бағасы: ~~2490₸~~ → *${price}₸* 🎁\n\n` +
+        `⏰ *Жазылым мерзімі: 90 күн*\n\n` +
         `✓ Рамазанның 30 күніне арналған трекер\n` +
         `✓ Алланың 99 есімі\n` +
-        `✓ Құранды пара бойынша оқу\n` +
-        `✓ Марапаттар мен XP жүйесі\n` +
-        `✓ Лидерборд\n\n` +
+        `✓ Мақсаттар прогрессі\n` +
+        `✓ Құранды пара бойынша оқу кестесі\n` +
+        `✓ Турнир және XP жүйесі\n` +
+        `✓ Топпен жұмыс\n\n` +
         `Kaspi арқылы төлем жасап, чекті осында жіберіңіз.`;
       
       inlineKeyboard = [
@@ -908,14 +1104,16 @@ async function showPayment(chatId, userId, price, hasDiscount) {
     // ✅ СЦЕНАРИЙ 2: Промокод применён ВРУЧНУЮ
     else if (user.usedPromoCode && hasDiscount) {
       messageText = 
-        `💳 *Imantap Premium-ға қолжетімділік*\n\n` +
+        `💳 *ImanTap Premium-ға қолжетімділік*\n\n` +
         `🎉 Промокод қолданылды: *${user.usedPromoCode}*\n\n` +
         `Бағасы: ~~2490₸~~ → *${price}₸* 🎁\n\n` +
+        `⏰ *Жазылым мерзімі: 90 күн*\n\n` +
         `✓ Рамазанның 30 күніне арналған трекер\n` +
         `✓ Алланың 99 есімі\n` +
-        `✓ Құранды пара бойынша оқу\n` +
-        `✓ Марапаттар мен XP жүйесі\n` +
-        `✓ Лидерборд\n\n` +
+        `✓ Мақсаттар прогрессі\n` +
+        `✓ Құранды пара бойынша оқу кестесі\n` +
+        `✓ Турнир және XP жүйесі\n` +
+        `✓ Топпен жұмыс\n\n` +
         `Kaspi арқылы төлем жасап, чекті осында жіберіңіз.`;
       
       inlineKeyboard = [
@@ -926,13 +1124,15 @@ async function showPayment(chatId, userId, price, hasDiscount) {
     // ✅ СЦЕНАРИЙ 3: ОБЫЧНЫЙ пользователь БЕЗ скидки
     else {
       messageText = 
-        `💳 *Imantap Premium-ға қолжетімділік*\n\n` +
+        `💳 *ImanTap Premium-ға қолжетімділік*\n\n` +
         `Бағасы: *${price}₸*\n\n` +
+        `⏰ *Жазылым мерзімі: 90 күн*\n\n` +
         `✓ Рамазанның 30 күніне арналған трекер\n` +
         `✓ Алланың 99 есімі\n` +
-        `✓ Құранды пара бойынша оқу\n` +
-        `✓ Марапаттар мен XP жүйесі\n` +
-        `✓ Лидерборд\n\n` +
+        `✓ Мақсаттар прогрессі\n` +
+        `✓ Құранды пара бойынша оқу кестесі\n` +
+        `✓ Турнир және XP жүйесі\n` +
+        `✓ Топпен жұмыс\n\n` +
         `Kaspi арқылы төлем жасап, чекті осында жіберіңіз.`;
       
       inlineKeyboard = [
@@ -1221,7 +1421,7 @@ bot.on('message', async (msg) => {
     await bot.sendMessage(
       chatId,
       `💳 *Толық нұсқаға өту*\n\n` +
-      `Imantap Premium бағасы:\n\n` +
+      `ImanTap Premium бағасы:\n\n` +
       `• Қалыпты баға: *2 490₸*\n` +
       `• Промокод бар болса: *1 990₸*\n\n` +
       `Промокод бар ма?`,
@@ -1726,7 +1926,7 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       bot.sendMessage(
         chatId,
         `Ассаляму Алейкум, ${from.first_name}! 👑\n\n` +
-        `Вы администратор Imantap.\n\n` +
+        `Вы администратор ImanTap.\n\n` +
         `Трекерді ашу үшін төмендегі батырманы басыңыз:`,
         {
           reply_markup: {
@@ -1770,6 +1970,26 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
               [{ text: "💳 Толық нұсқаны сатып алу" }] // ✅ Точный текст
             ],
             resize_keyboard: true
+          }
+        }
+      );
+      return;
+    }
+
+    // 🔥 ИСТЕКШАЯ ПОДПИСКА - предлагаем продлить
+    if (user.paymentStatus === 'subscription_expired') {
+      bot.sendMessage(
+        chatId,
+        `❌ Сәлем, ${from.firstname}!\n\n` +
+        `Сіздің жазылымыңыз аяқталды.\n\n` +
+        `📅 Аяқталған күн: ${new Date(user.subscriptionExpiresAt).toLocaleDateString('kk-KZ')}\n\n` +
+        `🔄 Жаңарту үшін төмендегі батырманы басыңыз:`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [[
+              { text: '🔄 Жазылымды жаңарту', callback_data: 'renew_subscription' }
+            ]]
           }
         }
       );
@@ -2114,7 +2334,7 @@ bot.onText(/\/removemanager(?:\s+(\d+))?/, async (msg, match) => {
       try {
         await bot.sendMessage(
           managerId,
-          `⚠️ Вы удалены из списка менеджеров Imantap.`
+          `⚠️ Вы удалены из списка менеджеров ImanTap.`
         );
       } catch (e) {
         // Игнорируем
