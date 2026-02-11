@@ -2,7 +2,7 @@
 import { MongoClient } from 'mongodb';
 
 // Поддержка Railway MongoDB (MONGO_URL) и MongoDB Atlas (MONGODB_URI)
-const connectionString = process.env.MONGO_URL || process.env.MONGODB_URI;
+const connectionString = process.env.MONGO_URI || process.env.MONGO_URL || process.env.MONGODB_URI;
 const dbName = process.env.DB_NAME || 'imantap_db';
 
 if (!connectionString) {
