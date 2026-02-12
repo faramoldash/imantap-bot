@@ -1975,7 +1975,10 @@ async function notifyAdminsNewPayment(userId, fileId, fileType) {
       // Если ввёл промокод вручную, находим владельца
       const promoOwner = await getUserByPromoCode(user.usedPromoCode);
       if (promoOwner) {
-        referralInfo = `${user.usedPromoCode} (от @${promoOwner.username || promoOwner.userId})`;
+        const ownerName = promoOwner.username 
+          ? (promoOwner.username.startsWith('@') ? promoOwner.username : `@${promoOwner.username}`)
+          : `ID: ${promoOwner.userId}`;
+        referralInfo = `${user.usedPromoCode} (от ${ownerName})`;
       } else {
         referralInfo = `${user.usedPromoCode}`;
       }
@@ -1985,10 +1988,15 @@ async function notifyAdminsNewPayment(userId, fileId, fileType) {
       ? `<s>${formatPrice(2490)}</s> → <b>${formatPrice(user.paidAmount)}</b> ✅ Скидка!` 
       : `<b>${formatPrice(user.paidAmount)}</b>`;
 
+    // Форматируем username (проверяем есть ли уже @)
+    const usernameDisplay = user.username 
+      ? (user.username.startsWith('@') ? user.username : `@${user.username}`)
+      : '—';
+
     const caption = 
       `🔔 <b>Новый платёж на проверке!</b>\n\n` +
       `👤 User ID: <code>${userId}</code>\n` +
-      `📱 Username: ${user.username ? '@' + user.username : '—'}\n` +
+      `📱 Username: ${usernameDisplay}\n` +
       `📞 Телефон: ${user.phoneNumber || '—'}\n` +
       `📍 Город: ${user.location?.city || '—'}\n` +
       `💰 Сумма: ${discountText}\n` +
@@ -2171,7 +2179,7 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       return;
     }
 
-    // 🔥 ПРОВЕРКА 2: Если есть реферальная ссылка
+    // 🔥 ПРОВЕРКА 2: Обработка реферальной ссылки
     let referralCode = null;
     if (param && param.startsWith('ref_')) {
       referralCode = param.substring(4);
@@ -2189,23 +2197,26 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       const inviter = await getUserByPromoCode(referralCode);
 
       if (inviter) {
-        // Сохраняем реферал и применяем скидку
-        await updateUserOnboarding(userId, {
-          referredBy: referralCode,
-          hasDiscount: true
-        });
-        
-        // Реферальный бонус будет начислен ПОСЛЕ завершения онбординга
-        console.log(`🎯 Реферал начал онбординг: userId ${userId} → промокод ${referralCode}`);
-        
-        bot.sendMessage(
-          chatId,
-          `🎁 *Сізде реферал сілтемесі бар!*\n\n` +
-          `Досыңыз сізді шақырды.\n` +
-          `Сіз -500₸ жеңілдік аласыз!\n\n` +
-          `Баптауды бастайық! 🚀`,
-          { parse_mode: 'Markdown' }
-        );
+        // ✅ ВАЖНО: Сохраняем реферал ТОЛЬКО если ЕЩЁ НЕ СОХРАНЁН
+        if (!user.referredBy && !user.usedPromoCode) {
+          await updateUserOnboarding(userId, {
+            referredBy: referralCode,
+            hasDiscount: true
+          });
+          
+          console.log(`🎯 Реферал сохранён: userId ${userId} → промокод ${referralCode}`);
+          
+          bot.sendMessage(
+            chatId,
+            `🎁 *Сізде реферал сілтемесі бар!*\n\n` +
+            `Досыңыз сізді шақырды.\n` +
+            `Сіз -500₸ жеңілдік аласыз!\n\n` +
+            `Баптауды бастайық! 🚀`,
+            { parse_mode: 'Markdown' }
+          );
+        } else {
+          console.log(`ℹ️ Пользователь ${userId} уже имеет промокод/реферал. Игнорируем новую ссылку.`);
+        }
       }
     }
 
@@ -2257,7 +2268,7 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
       return;
     }
     
-    // Если НЕТ промокода И НЕТ реферала - спрашиваем промокод
+    // ✅ ВАЖНО: Если уже есть промокод ИЛИ реферал - НЕ СПРАШИВАЕМ заново!
     if (!user.usedPromoCode && !user.referredBy) {
       await requestPromoCode(chatId, userId);
       return;
@@ -2265,8 +2276,8 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
     
     // Если всё есть, но НЕ оплачено - показываем оплату
     if (user.paymentStatus !== 'paid') {
-      const price = (user.hasDiscount || user.referredBy) ? 1990 : 2490;
-      const hasDiscount = !!(user.hasDiscount || user.referredBy);
+      const price = (user.hasDiscount || user.referredBy || user.usedPromoCode) ? 1990 : 2490;
+      const hasDiscount = !!(user.hasDiscount || user.referredBy || user.usedPromoCode);
       await showPayment(chatId, userId, price, hasDiscount);
       return;
     }
