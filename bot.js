@@ -991,7 +991,7 @@ bot.on('callback_query', async (query) => {
         `• Сома дұрыс емес\n` +
         `• Чек анық емес\n` +
         `• Төлем табылмады\n\n` +
-        `Қайтадан көріңіз немесе қолдау қызметіне жазыңыз.`
+        `Қайтадан көріңіз немесе қолдау қызметіне жазыңыз: @ImanTapSupport` // Добавляем контакт поддержки
       );
 
       console.log(`❌ Оплата отклонена для пользователя ${targetUserId}`);
@@ -1966,42 +1966,58 @@ async function notifyAdminsNewPayment(userId, fileId, fileType) {
   try {
     const user = await getUserById(userId);
     const adminIds = await getAdmins();
-    
+
+    // Определяем реферала
+    let referralInfo = '—';
+    if (user.referredBy) {
+      referralInfo = `${user.referredBy}`;
+    } else if (user.usedPromoCode) {
+      // Если ввёл промокод вручную, находим владельца
+      const promoOwner = await getUserByPromoCode(user.usedPromoCode);
+      if (promoOwner) {
+        referralInfo = `${user.usedPromoCode} (от @${promoOwner.username || promoOwner.userId})`;
+      } else {
+        referralInfo = `${user.usedPromoCode}`;
+      }
+    }
+
     const discountText = user.hasDiscount 
-      ? `💰 Сумма: <s>${formatPrice(2490)}₸</s> → <b>${formatPrice(user.paidAmount)}₸</b> (промокод применён!)`
-      : `💰 Сумма: <b>${formatPrice(user.paidAmount)}₸</b>`;
-    
-    // Экранируем все данные пользователя
-    const caption = `🔔 Новый платёж на проверке!\n\n` +
-      `👤 User ID: ${userId}\n` +
-      `📱 Username: ${escapeMarkdown(user.username || '—')}\n` +
-      `📞 Телефон: ${escapeMarkdown(user.phoneNumber)}\n` +
-      `📍 Город: ${escapeMarkdown(user.location?.city)}\n` +
-      `${discountText}\n` +
-      `🎟️ Промокод: ${escapeMarkdown(user.usedPromoCode || '—')}\n` +
-      `👥 Реферал: ${escapeMarkdown(user.referredBy || '—')}\n` +
+      ? `<s>${formatPrice(2490)}</s> → <b>${formatPrice(user.paidAmount)}</b> ✅ Скидка!` 
+      : `<b>${formatPrice(user.paidAmount)}</b>`;
+
+    const caption = 
+      `🔔 <b>Новый платёж на проверке!</b>\n\n` +
+      `👤 User ID: <code>${userId}</code>\n` +
+      `📱 Username: ${user.username ? '@' + user.username : '—'}\n` +
+      `📞 Телефон: ${user.phoneNumber || '—'}\n` +
+      `📍 Город: ${user.location?.city || '—'}\n` +
+      `💰 Сумма: ${discountText}\n` +
+      `🎟️ Промокод: ${user.usedPromoCode || '—'}\n` +
+      `👥 Реферал: ${referralInfo}\n` +
       `📅 ${new Date().toLocaleString('ru-RU')}`;
-    
+
     const keyboard = {
-      inline_keyboard: [[
-        { text: '✅ Одобрить', callback_data: `approve_${userId}` },
-        { text: '❌ Отклонить', callback_data: `reject_${userId}` }
-      ]]
+      inline_keyboard: [
+        [
+          { text: '✅ Одобрить', callback_data: `approve_${userId}` },
+          { text: '❌ Отклонить', callback_data: `reject_${userId}` }
+        ]
+      ]
     };
-    
+
     for (const adminId of adminIds) {
       try {
         if (fileType === 'photo') {
-          await bot.sendPhoto(adminId, fileId, {
-            caption,
-            parse_mode: 'HTML',
-            reply_markup: keyboard
+          await bot.sendPhoto(adminId, fileId, { 
+            caption, 
+            parse_mode: 'HTML', 
+            reply_markup: keyboard 
           });
         } else {
-          await bot.sendDocument(adminId, fileId, {
-            caption,
-            parse_mode: 'HTML',
-            reply_markup: keyboard
+          await bot.sendDocument(adminId, fileId, { 
+            caption, 
+            parse_mode: 'HTML', 
+            reply_markup: keyboard 
           });
         }
         console.log(`✅ Уведомление отправлено админу ${adminId}`);
@@ -2010,7 +2026,7 @@ async function notifyAdminsNewPayment(userId, fileId, fileType) {
       }
     }
   } catch (error) {
-    console.error('❌ Ошибка при уведомлении админов:', error);
+    console.error('❌ Ошибка в notifyAdminsNewPayment:', error);
   }
 }
 
