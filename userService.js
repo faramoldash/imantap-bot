@@ -398,19 +398,27 @@ async function rejectPayment(userId) {
   
   let demoExpiresAt = null;
   let accessType = null;
-  let demoGiven = false;
+  let demoStatus = 'none'; // none, active, given_new
   
-  // ✅ ПРОВЕРКА: Если уже КОГДА-ЛИБО получал демо (вручную или при отклонении) - НЕ ДАЁМ
-  if (user.accessType === 'demo' || user.demoGivenOnRejection) {
-    // Уже получал демо раньше
+  // ✅ ПРОВЕРКА 1: Если демо УЖЕ активен и НЕ истёк - НЕ ТРОГАЕМ!
+  if (user.accessType === 'demo' && user.demoExpiresAt && new Date() < new Date(user.demoExpiresAt)) {
+    demoExpiresAt = user.demoExpiresAt; // Оставляем старую дату
+    accessType = 'demo';
+    demoStatus = 'active';
+    console.log(`ℹ️ Демо-режим ещё активен до ${demoExpiresAt}. Не перезапускаем.`);
+  } 
+  // ✅ ПРОВЕРКА 2: Если демо НЕ активен, но уже давали раньше - НЕ ДАЁМ повторно
+  else if (user.demoGivenOnRejection || user.demoActivatedManually) {
     demoExpiresAt = null;
     accessType = null;
+    demoStatus = 'none';
     console.log(`⚠️ Пользователь ${userId} уже получал демо. Не даётся повторно.`);
-  } else {
-    // Первый раз получает демо при отклонении
+  } 
+  // ✅ ПРОВЕРКА 3: Первый раз получает демо при отклонении
+  else {
     demoExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
     accessType = 'demo';
-    demoGiven = true;
+    demoStatus = 'given_new';
     console.log(`🎁 Первое отклонение. Даём демо-доступ до ${demoExpiresAt}`);
   }
   
@@ -418,16 +426,16 @@ async function rejectPayment(userId) {
     paymentStatus: 'unpaid',
     accessType: accessType,
     demoExpiresAt: demoExpiresAt,
-    demoGivenOnRejection: true, // ✅ Помечаем что отклонение было
+    demoGivenOnRejection: demoStatus === 'given_new' ? true : user.demoGivenOnRejection,
     updatedAt: new Date()
     // ✅ usedPromoCode и referredBy НЕ ТРОГАЕМ!
   };
   
   await users.updateOne({ userId }, { $set: updateData });
   
-  console.log(`❌ Оплата отклонена для пользователя ${userId}`);
+  console.log(`❌ Оплата отклонена для пользователя ${userId}. Статус демо: ${demoStatus}`);
   
-  return { demoGiven };
+  return { demoStatus, demoExpiresAt };
 }
 
 async function getPendingPayments() {

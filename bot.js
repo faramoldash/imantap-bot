@@ -1199,6 +1199,42 @@ async function showPayment(chatId, userId, price, hasDiscount) {
     const kaspiLink = process.env.KASPI_LINK || 'https://pay.kaspi.kz/pay/ygtke7vw';
     const user = await getUserById(userId);
 
+    // ✅ НАЧИСЛЯЕМ РЕФЕРАЛЬНЫЙ БОНУС для реферальной ссылки
+    if (user.referredBy && !user.referralBonusGiven) {
+      const inviter = await getUserByPromoCode(user.referredBy);
+      if (inviter) {
+        // Увеличиваем счётчик рефералов
+        await incrementReferralCount(user.referredBy);
+        
+        // Начисляем +100 XP обоим
+        await addUserXP(userId, 100, 'Регистрация по реферальной ссылке');
+        await addUserXP(inviter.userId, 100, `Реферал: ${user.name || user.username || 'Жаңа қолданушы'} тіркелді`);
+        
+        // Получаем обновлённые данные рефера
+        const updatedInviter = await getUserById(inviter.userId);
+        
+        // Отправляем уведомление рефереру
+        try {
+          await bot.sendMessage(
+            inviter.userId,
+            `🎉 *Жаңа реферал!*\n\n` +
+            `👤 *${user.name || user.username || 'Жаңа қолданушы'}* сіздің промокодыңыз бойынша тіркелді!\n` +
+            `🎯 Сіз алдыңыз: +100 XP\n\n` +
+            `Барлық рефералдар: ${updatedInviter.invitedCount} 🔥`,
+            { parse_mode: 'Markdown' }
+          );
+          console.log(`🎉 Реферальный бонус начислен: ${user.referredBy} → userId ${userId}`);
+        } catch (e) {
+          console.error('❌ Ошибка отправки уведомления рефереру:', e.message);
+        }
+        
+        // Отмечаем что бонус уже начислен
+        await updateUserOnboarding(userId, {
+          referralBonusGiven: true
+        });
+      }
+    }
+
     // ✅ НАЧИСЛЯЕМ РЕФЕРАЛЬНЫЙ БОНУС для промокода (введённого вручную)
     if (user.usedPromoCode && !user.referralBonusGiven && !user.referredBy) {
       const inviter = await getUserByPromoCode(user.usedPromoCode);
