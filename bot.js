@@ -966,32 +966,51 @@ bot.on('callback_query', async (query) => {
 
       // Обновляем сообщение админа (БЕЗ MARKDOWN!)
       const originalCaption = query.message.caption || '';
-      const baseInfo = originalCaption.split('Подтвердить оплату?')[0];
+      const baseInfo = originalCaption.split('📅')[0]; // Берём всё до даты
       
       await bot.editMessageCaption(
-        `❌ ОПЛАТА ОТКЛОНЕНА\n\n` +
         baseInfo +
-        `\n❌ Отклонил: ${query.from.username ? '@' + query.from.username : 'ID: ' + userId}\n` +
+        `\n❌ <b>ОТКЛОНЕНО</b> ${query.from.username ? '@' + query.from.username : 'ID: ' + userId}\n` +
         `⏰ ${new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' })}`,
         {
           chat_id: chatId,
-          message_id: messageId
-          // БЕЗ parse_mode!
+          message_id: messageId,
+          parse_mode: 'HTML' // ✅ Добавляем parse_mode
         }
       );
 
       await bot.answerCallbackQuery(query.id, { text: '❌ Оплата отклонена' });
 
+      // Получаем данные пользователя для проверки промокода
+      const user = await getUserById(targetUserId);
+      const hasPromo = !!(user.usedPromoCode || user.referredBy);
+      const price = hasPromo ? 1990 : 2490;
+
       // Уведомляем пользователя
       await bot.sendMessage(
         targetUserId,
-        `❌ Төлем расталмады\n\n` +
+        `❌ *Төлем расталмады*\n\n` +
         `Өкінішке орай, төлеміңізді растай алмадық.\n\n` +
         `Мүмкін себептері:\n` +
         `• Сома дұрыс емес\n` +
         `• Чек анық емес\n` +
         `• Төлем табылмады\n\n` +
-        `Қайтадан көріңіз немесе қолдау қызметіне жазыңыз: @ImanTapSupport` // Добавляем контакт поддержки
+        `🎁 Сізге 24 сағатқа демо-қолжетімділік берілді.\n\n` +
+        `${hasPromo ? `💰 Сіздің промокод сақталды: *-500₸ жеңілдік*\n\n` : ''}` +
+        `Қайта төлем жасау үшін төмендегі батырманы басыңыз:`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            keyboard: [
+              [{
+                text: '📱 ImanTap ашу',
+                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${targetUserId}` }
+              }],
+              [{ text: '💳 Қайта төлем жасау' }]
+            ],
+            resize_keyboard: true
+          }
+        }
       );
 
       console.log(`❌ Оплата отклонена для пользователя ${targetUserId}`);
@@ -1473,18 +1492,46 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  // ==========================================
   // 💳 Обработка кнопки покупки из demo режима
-  if (text === '💳 Толық нұсқаны сатып алу') {
+  // ==========================================
+  if (text === '💳 Толық нұсқаны сатып алу' || text === '💳 Қайта төлем жасау') {
     const user = await getUserById(userId);
-    const session = getSession(userId);
     
-    // Если пришёл по реферальной ссылке - сразу скидка
-    if (session.data.referralCode || user?.referredBy) {
+    if (!user) {
+      await bot.sendMessage(chatId, '❌ Пайдаланушы табылмады. /start басыңыз');
+      return;
+    }
+    
+    // ✅ ПРОВЕРКА: Если уже оплачено
+    if (user.paymentStatus === 'paid') {
+      await bot.sendMessage(
+        chatId,
+        `✅ Сізде қазірдің өзінде Premium бар!\n\nMini App-ты ашыңыз:`,
+        {
+          reply_markup: {
+            keyboard: [
+              [{
+                text: '📱 ImanTap ашу',
+                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
+              }],
+              ['⚙️ Баптаулар', '📊 Статистика'],
+              ['🎁 Менің промокодым']
+            ],
+            resize_keyboard: true
+          }
+        }
+      );
+      return;
+    }
+    
+    // ✅ ПРОВЕРКА: Если УЖЕ есть промокод или реферал - НЕ СПРАШИВАЕМ заново!
+    if (user.usedPromoCode || user.referredBy) {
       await showPayment(chatId, userId, 1990, true);
       return;
     }
     
-    // 💳 Показываем ТОЛЬКО варианты оплаты (БЕЗ demo)
+    // ✅ Если нет промокода - спрашиваем
     await bot.sendMessage(
       chatId,
       `💳 *Толық нұсқаға өту*\n\n` +
@@ -1513,10 +1560,40 @@ bot.on('message', async (msg) => {
   if (state === 'WAITING_PROMO') {
   
     // 🎁 ДЕМО-ДОСТУП
+    // ==========================================
+    // Обработка "24 сағат тегін" (демо-режим)
+    // ==========================================
     if (text === '🎁 24 сағат тегін') {
       try {
-        const demoExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        const user = await getUserById(userId);
         
+        // ✅ ПРОВЕРКА: Если демо УЖЕ активен - не даём повторно
+        if (user.accessType === 'demo' && user.demoExpiresAt && new Date() < new Date(user.demoExpiresAt)) {
+          const hoursLeft = Math.floor((new Date(user.demoExpiresAt) - new Date()) / (1000 * 60 * 60));
+          await bot.sendMessage(
+            chatId,
+            `⚠️ Демо-режим қосулы!\n\n` +
+            `⏳ Қалған уақыт: ${hoursLeft} сағат\n\n` +
+            `Трекерді пайдаланыңыз:`,
+            {
+              parse_mode: 'Markdown',
+              reply_markup: {
+                keyboard: [
+                  [{
+                    text: '📱 ImanTap ашу',
+                    web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
+                  }],
+                  [{ text: '💳 Толық нұсқаны сатып алу' }]
+                ],
+                resize_keyboard: true
+              }
+            }
+          );
+          return;
+        }
+        
+        // ✅ Активируем демо только 1 раз
+        const demoExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
         await updateUserOnboarding(userId, {
           accessType: 'demo',
           demoExpiresAt: demoExpiresAt,
@@ -1526,19 +1603,18 @@ bot.on('message', async (msg) => {
         
         await bot.sendMessage(
           chatId,
-          `🎉 *Демо-режим қосылды!*\n\n` +
-          `Сізде *24 сағат* тегін қолжетімділік бар.\n\n` +
-          `Барлық мүмкіндіктерді қолданып көріңіз! 🌙\n\n` +
-          `Демо аяқталғаннан кейін төлем жасауға болады.`,
+          `✅ *Demo-режим қосылды!* 🎉\n\n` +
+          `⏳ 24 сағат бойы толық функционал қолжетімді.\n\n` +
+          `🚀 Трекерді пайдаланып көріңіз!`,
           {
             parse_mode: 'Markdown',
             reply_markup: {
               keyboard: [
                 [{
-                  text: "📱 Рамазан трекерін ашу",
+                  text: '📱 Рамазан трекерін ашу',
                   web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
                 }],
-                [{ text: "💳 Толық нұсқаны сатып алу" }] // ✅ Добавили кнопку!
+                [{ text: '💳 Толық нұсқаны сатып алу' }]
               ],
               resize_keyboard: true
             }
@@ -1547,7 +1623,6 @@ bot.on('message', async (msg) => {
         
         console.log(`🎁 Демо-доступ активирован для пользователя ${userId} до ${demoExpiresAt.toISOString()}`);
         clearSession(userId);
-        
       } catch (error) {
         console.error('❌ Ошибка активации демо:', error);
         await bot.sendMessage(chatId, '❌ Қате орын алды. Қайталап көріңіз.');
