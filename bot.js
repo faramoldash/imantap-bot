@@ -1572,7 +1572,7 @@ bot.on('message', async (msg) => {
           const hoursLeft = Math.floor((new Date(user.demoExpiresAt) - new Date()) / (1000 * 60 * 60));
           await bot.sendMessage(
             chatId,
-            `⚠️ Демо-режим қосулы!\n\n` +
+            `⚠️ Демо-режим қазірдің өзінде қосулы!\n\n` +
             `⏳ Қалған уақыт: ${hoursLeft} сағат\n\n` +
             `Трекерді пайдаланыңыз:`,
             {
@@ -1592,13 +1592,33 @@ bot.on('message', async (msg) => {
           return;
         }
         
+        // ✅ ПРОВЕРКА: Если демо уже давали при отклонении - не даём
+        if (user.demoGivenOnRejection) {
+          await bot.sendMessage(
+            chatId,
+            `⚠️ Сіз демо-қолжетімділікті алдын ала алдыңыз.\n\n` +
+            `Толық нұсқаға өту үшін төлем жасаңыз:`,
+            {
+              parse_mode: 'Markdown',
+              reply_markup: {
+                keyboard: [
+                  [{ text: '💳 Толық нұсқаны сатып алу' }]
+                ],
+                resize_keyboard: true
+              }
+            }
+          );
+          return;
+        }
+        
         // ✅ Активируем демо только 1 раз
         const demoExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
         await updateUserOnboarding(userId, {
           accessType: 'demo',
           demoExpiresAt: demoExpiresAt,
           onboardingCompleted: true,
-          paymentStatus: 'unpaid'
+          paymentStatus: 'unpaid',
+          demoActivatedManually: true // ✅ Помечаем что активировал вручную
         });
         
         await bot.sendMessage(
@@ -1614,14 +1634,14 @@ bot.on('message', async (msg) => {
                   text: '📱 Рамазан трекерін ашу',
                   web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
                 }],
-                [{ text: '💳 Толық нұсқаны сатып алу' }]
+                [{ text: '💳 Сатып алу' }]
               ],
               resize_keyboard: true
             }
           }
         );
         
-        console.log(`🎁 Демо-доступ активирован для пользователя ${userId} до ${demoExpiresAt.toISOString()}`);
+        console.log(`🎁 Демо-доступ активирован вручную для пользователя ${userId} до ${demoExpiresAt.toISOString()}`);
         clearSession(userId);
       } catch (error) {
         console.error('❌ Ошибка активации демо:', error);

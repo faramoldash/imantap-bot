@@ -393,21 +393,41 @@ async function rejectPayment(userId) {
   const db = getDB();
   const users = db.collection('users');
   
-  const demoExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  // ✅ Получаем текущие данные пользователя
+  const user = await users.findOne({ userId });
+  
+  let demoExpiresAt = null;
+  let accessType = null;
+  let demoGiven = false;
+  
+  // ✅ ПРОВЕРКА: Если уже КОГДА-ЛИБО получал демо (вручную или при отклонении) - НЕ ДАЁМ
+  if (user.accessType === 'demo' || user.demoGivenOnRejection) {
+    // Уже получал демо раньше
+    demoExpiresAt = null;
+    accessType = null;
+    console.log(`⚠️ Пользователь ${userId} уже получал демо. Не даётся повторно.`);
+  } else {
+    // Первый раз получает демо при отклонении
+    demoExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    accessType = 'demo';
+    demoGiven = true;
+    console.log(`🎁 Первое отклонение. Даём демо-доступ до ${demoExpiresAt}`);
+  }
   
   const updateData = {
-    paymentStatus: 'unpaid', // ✅ ИЗМЕНЕНО: unpaid вместо rejected
-    accessType: 'demo',
-    demoExpiresAt,
+    paymentStatus: 'unpaid',
+    accessType: accessType,
+    demoExpiresAt: demoExpiresAt,
+    demoGivenOnRejection: true, // ✅ Помечаем что отклонение было
     updatedAt: new Date()
     // ✅ usedPromoCode и referredBy НЕ ТРОГАЕМ!
   };
   
   await users.updateOne({ userId }, { $set: updateData });
   
-  console.log(`❌ Оплата отклонена для пользователя ${userId}. Дан демо-доступ до ${demoExpiresAt}`);
+  console.log(`❌ Оплата отклонена для пользователя ${userId}`);
   
-  return true;
+  return { demoGiven };
 }
 
 async function getPendingPayments() {
