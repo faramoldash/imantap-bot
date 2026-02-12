@@ -396,10 +396,11 @@ async function rejectPayment(userId) {
   const demoExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
   
   const updateData = {
-    paymentStatus: 'rejected',
+    paymentStatus: 'unpaid', // ✅ ИЗМЕНЕНО: unpaid вместо rejected
     accessType: 'demo',
     demoExpiresAt,
     updatedAt: new Date()
+    // ✅ usedPromoCode и referredBy НЕ ТРОГАЕМ!
   };
   
   await users.updateOne({ userId }, { $set: updateData });
