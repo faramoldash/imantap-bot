@@ -181,14 +181,25 @@ async function updateUserProgress(userId, progressData) {
       updatedAt: new Date()
     };
     
-    // ✅ Добавляем только те поля, которые есть в progressData
+    // ✅ ЗАЩИТА: Не сохраняем пустые объекты/массивы для критических полей
+    const shouldUpdate = (value) => {
+      if (value === undefined || value === null) return false;
+      if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) return false; // Пустой объект
+      return true;
+    };
+    
+    // ✅ Добавляем только те поля, которые есть в progressData И НЕ пустые
     if (progressData.name !== undefined) updateFields.name = progressData.name;
     if (progressData.username !== undefined) updateFields.username = progressData.username;
     if (progressData.photoUrl !== undefined) updateFields.photoUrl = progressData.photoUrl;
     if (progressData.registrationDate !== undefined) updateFields.registrationDate = progressData.registrationDate;
-    if (progressData.progress !== undefined) updateFields.progress = progressData.progress;
-    if (progressData.preparationProgress !== undefined) updateFields.preparationProgress = progressData.preparationProgress;
-    if (progressData.basicProgress !== undefined) updateFields.basicProgress = progressData.basicProgress;  // ✅ ДОБАВЛЕНО!
+    
+    // ✅ КРИТИЧЕСКИЕ ПОЛЯ: Не перезаписываем если пустые
+    if (shouldUpdate(progressData.progress)) updateFields.progress = progressData.progress;
+    if (shouldUpdate(progressData.preparationProgress)) updateFields.preparationProgress = progressData.preparationProgress;
+    if (shouldUpdate(progressData.basicProgress)) updateFields.basicProgress = progressData.basicProgress;
+    
+    // Массивы и другие поля
     if (progressData.memorizedNames !== undefined) updateFields.memorizedNames = progressData.memorizedNames;
     if (progressData.completedJuzs !== undefined) updateFields.completedJuzs = progressData.completedJuzs;
     if (progressData.quranKhatams !== undefined) updateFields.quranKhatams = progressData.quranKhatams;
