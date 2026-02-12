@@ -758,7 +758,7 @@ bot.on('callback_query', async (query) => {
   // ==========================================
   // Обработка кнопки "У меня есть чек"
   // ==========================================
-  if (data === 'have_receipt') {
+  if (data === 'havereceipt') {
     console.log('🔵 have_receipt START | userId:', userId);
     
     try {
