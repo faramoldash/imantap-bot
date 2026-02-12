@@ -176,6 +176,141 @@ async function updateUserProgress(userId, progressData) {
     const db = getDB();
     const usersCollection = db.collection('users');
     
+    // ✅ Текущая дата в Almaty timezone
+    const almatyOffset = 5 * 60;
+    const now = new Date();
+    const almatyTime = new Date(now.getTime() + (almatyOffset + now.getTimezoneOffset()) * 60000);
+    const todayDateStr = almatyTime.toISOString().split('T')[0];
+    
+    // ✅ Получаем СТАРЫЕ данные из БД
+    const oldUser = await usersCollection.findOne({ userId: parseInt(userId) });
+    if (!oldUser) {
+      console.error('❌ Пользователь не найден:', userId);
+      return false;
+    }
+    
+    // ✅ НАЧИСЛЯЕМ XP - сравниваем старое и новое
+    let xpToAdd = 0;
+    
+    // Проверяем Рамадан прогресс
+    if (progressData.progress) {
+      const oldProgress = oldUser.progress || {};
+      for (const day in progressData.progress) {
+        const dayNum = parseInt(day);
+        const newDayData = progressData.progress[day];
+        const oldDayData = oldProgress[day] || {};
+        
+        // ✅ Вычисляем дату этого дня Рамадана
+        const ramadanStart = new Date('2026-02-19T00:00:00+05:00');
+        const dayDate = new Date(ramadanStart);
+        dayDate.setDate(ramadanStart.getDate() + (dayNum - 1));
+        const dayDateStr = dayDate.toISOString().split('T')[0];
+        
+        // ✅ XP только если это СЕГОДНЯ
+        const isToday = dayDateStr === todayDateStr;
+        
+        if (isToday) {
+          // Проверяем каждую задачу
+          for (const taskKey in newDayData) {
+            // Задача отмечена ВПЕРВЫЕ сегодня?
+            if (newDayData[taskKey] === true && !oldDayData[taskKey]) {
+              const baseXP = XP_VALUES[taskKey] || 10;
+              
+              // ✅ STREAK BONUS
+              const currentStreak = oldUser.currentStreak || 0;
+              const streakMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
+              
+              const finalXP = Math.floor(baseXP * streakMultiplier);
+              xpToAdd += finalXP;
+              
+              console.log(`✅ +${finalXP} XP за ${taskKey} (день ${dayNum}, streak x${streakMultiplier.toFixed(1)})`);
+            }
+          }
+        }
+      }
+    }
+    
+    // Проверяем Preparation прогресс
+    if (progressData.preparationProgress) {
+      const oldPrep = oldUser.preparationProgress || {};
+      for (const day in progressData.preparationProgress) {
+        const dayNum = parseInt(day);
+        const newDayData = progressData.preparationProgress[day];
+        const oldDayData = oldPrep[day] || {};
+        
+        // Вычисляем дату дня подготовки
+        const prepStart = new Date('2026-02-09T00:00:00+05:00');
+        const dayDate = new Date(prepStart);
+        dayDate.setDate(prepStart.getDate() + (dayNum - 1));
+        const dayDateStr = dayDate.toISOString().split('T')[0];
+        
+        const isToday = dayDateStr === todayDateStr;
+        
+        if (isToday) {
+          for (const taskKey in newDayData) {
+            if (newDayData[taskKey] === true && !oldDayData[taskKey]) {
+              const baseXP = XP_VALUES[taskKey] || 10;
+              const currentStreak = oldUser.currentStreak || 0;
+              const streakMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
+              const finalXP = Math.floor(baseXP * streakMultiplier);
+              xpToAdd += finalXP;
+              
+              console.log(`✅ +${finalXP} XP за ${taskKey} (подготовка день ${dayNum})`);
+            }
+          }
+        }
+      }
+    }
+    
+    // Проверяем Basic прогресс (по датам)
+    if (progressData.basicProgress) {
+      const oldBasic = oldUser.basicProgress || {};
+      for (const dateKey in progressData.basicProgress) {
+        const newDayData = progressData.basicProgress[dateKey];
+        const oldDayData = oldBasic[dateKey] || {};
+        
+        const isToday = dateKey === todayDateStr;
+        
+        if (isToday) {
+          for (const taskKey in newDayData) {
+            if (newDayData[taskKey] === true && !oldDayData[taskKey]) {
+              const baseXP = XP_VALUES[taskKey] || 10;
+              const currentStreak = oldUser.currentStreak || 0;
+              const streakMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
+              const finalXP = Math.floor(baseXP * streakMultiplier);
+              xpToAdd += finalXP;
+              
+              console.log(`✅ +${finalXP} XP за ${taskKey} (базовый день ${dateKey})`);
+            }
+          }
+        }
+      }
+    }
+    
+    // ✅ ОБНОВЛЯЕМ STREAK
+    const lastActiveDate = oldUser.lastActiveDate || '';
+    const yesterday = new Date(almatyTime);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split('T')[0];
+    
+    let newStreak = oldUser.currentStreak || 0;
+    
+    // Проверяем была ли активность сегодня
+    const hasActivityToday = xpToAdd > 0;
+    
+    if (hasActivityToday) {
+      if (lastActiveDate === yesterdayStr) {
+        // Продолжаем серию
+        newStreak += 1;
+      } else if (lastActiveDate !== todayDateStr) {
+        // Начинаем новую серию
+        newStreak = 1;
+      }
+      // Если lastActiveDate === todayDateStr - уже активен сегодня, не меняем
+    }
+    
+    const longestStreak = Math.max(oldUser.longestStreak || 0, newStreak);
+    
     // ✅ Создаем объект только с теми полями, которые пришли
     const updateFields = {
       updatedAt: new Date()
@@ -184,7 +319,7 @@ async function updateUserProgress(userId, progressData) {
     // ✅ ЗАЩИТА: Не сохраняем пустые объекты/массивы для критических полей
     const shouldUpdate = (value) => {
       if (value === undefined || value === null) return false;
-      if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) return false; // Пустой объект
+      if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) return false;
       return true;
     };
     
@@ -194,7 +329,7 @@ async function updateUserProgress(userId, progressData) {
     if (progressData.photoUrl !== undefined) updateFields.photoUrl = progressData.photoUrl;
     if (progressData.registrationDate !== undefined) updateFields.registrationDate = progressData.registrationDate;
     
-    // ✅ КРИТИЧЕСКИЕ ПОЛЯ: Не перезаписываем если пустые
+    // ✅ КРИТИЧЕСКИЕ ПОЛЯ
     if (shouldUpdate(progressData.progress)) updateFields.progress = progressData.progress;
     if (shouldUpdate(progressData.preparationProgress)) updateFields.preparationProgress = progressData.preparationProgress;
     if (shouldUpdate(progressData.basicProgress)) updateFields.basicProgress = progressData.basicProgress;
@@ -210,20 +345,27 @@ async function updateUserProgress(userId, progressData) {
     if (progressData.dailyQuranGoal !== undefined) updateFields.dailyQuranGoal = progressData.dailyQuranGoal;
     if (progressData.dailyCharityGoal !== undefined) updateFields.dailyCharityGoal = progressData.dailyCharityGoal;
     if (progressData.language !== undefined) updateFields.language = progressData.language;
-    if (progressData.xp !== undefined) updateFields.xp = progressData.xp;
+    
+    // ✅ XP - НЕ берём с фронта, считаем сами!
+    updateFields.xp = (oldUser.xp || 0) + xpToAdd;
+    
     if (progressData.hasRedeemedReferral !== undefined) updateFields.hasRedeemedReferral = progressData.hasRedeemedReferral;
     if (progressData.unlockedBadges !== undefined) updateFields.unlockedBadges = progressData.unlockedBadges;
-    if (progressData.currentStreak !== undefined) updateFields.currentStreak = progressData.currentStreak;
-    if (progressData.longestStreak !== undefined) updateFields.longestStreak = progressData.longestStreak;
-    if (progressData.lastActiveDate !== undefined) updateFields.lastActiveDate = progressData.lastActiveDate;
+    
+    // ✅ STREAK данные
+    if (hasActivityToday) {
+      updateFields.currentStreak = newStreak;
+      updateFields.longestStreak = longestStreak;
+      updateFields.lastActiveDate = todayDateStr;
+    }
     
     const result = await usersCollection.updateOne(
       { userId: parseInt(userId) },
       { $set: updateFields }
     );
     
-    if (result.modifiedCount > 0) {
-      console.log('✅ Прогресс обновлен для userId:', userId);
+    if (result.modifiedCount > 0 || xpToAdd > 0) {
+      console.log(`✅ Прогресс обновлен для userId: ${userId}, начислено XP: ${xpToAdd}`);
       return true;
     }
     
