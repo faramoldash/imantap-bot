@@ -558,6 +558,17 @@ async function getUserAccess(userId) {
   
   // Платёж на проверке
   if (user.paymentStatus === 'pending') {
+    // ✅ Если был в демо и отправил чек - СОХРАНЯЕМ demo доступ до одобрения
+    if (user.accessType === 'demo' && user.demoExpiresAt && new Date() < new Date(user.demoExpiresAt)) {
+      return { 
+        hasAccess: true, 
+        paymentStatus: 'demo', 
+        demoExpires: user.demoExpiresAt,
+        paymentPending: true // ← Флаг что чек на проверке
+      };
+    }
+    
+    // Если демо истекло или не было - блокируем
     return { 
       hasAccess: false, 
       paymentStatus: 'pending',

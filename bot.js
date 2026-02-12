@@ -2135,9 +2135,7 @@ async function handleReceipt(userId, chatId, fileId, fileType, fileName = null) 
       receiptFileType: fileType,
       receiptFileName: fileName,
       receiptSubmittedAt: new Date(),
-      paymentStatus: 'pending',
-      accessType: null,
-      demoExpiresAt: null
+      paymentStatus: 'pending'
     });
 
     await bot.sendMessage(
