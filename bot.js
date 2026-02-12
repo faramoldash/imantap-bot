@@ -759,21 +759,30 @@ bot.on('callback_query', async (query) => {
   // Обработка кнопки "У меня есть чек"
   // ==========================================
   if (data === 'have_receipt') {
-    await bot.answerCallbackQuery(query.id);
-    
-    await bot.sendMessage(
-      chatId,
-      `📸 *Төлем чегін жіберіңіз*\n\n` +
-      `Бұл мыналар болуы мүмкін:\n` +
-      `• Kaspi-ден скриншот\n` +
-      `• Квитанция фотосы\n` +
-      `• PDF құжат\n` +
-      `• Аударым растамасы\n\n` +
-      `Файлды осында жіберіңіз 👇`,
-      { parse_mode: 'Markdown' }
-    );
+    try {
+      await bot.answerCallbackQuery(query.id);
+      
+      await bot.sendMessage(
+        chatId,
+        `📸 *Төлем чегін жіберіңіз*\n\n` +
+        `Ол мыналар болуы мүмкін:\n` +
+        `• Kaspi-ден скриншот\n` +
+        `• Чектің фотосы\n` +
+        `• PDF құжат\n` +
+        `• Аударым растамасы\n\n` +
+        `Файлды осында жіберіңіз 👇`,
+        { parse_mode: 'Markdown' }
+      );
 
-    setState(userId, 'WAITING_RECEIPT');
+      setState(userId, 'WAITING_RECEIPT');
+      console.log(`✅ have_receipt обработан | userId: ${userId}`);
+    } catch (error) {
+      console.error('❌ Ошибка have_receipt:', error.message);
+      await bot.answerCallbackQuery(query.id, { 
+        text: '⚠️ Қате орын алды. Қайталап көріңіз.',
+        show_alert: true 
+      });
+    }
     return;
   }
 
