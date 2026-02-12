@@ -880,25 +880,24 @@ bot.on('callback_query', async (query) => {
     try {
       await approvePayment(targetUserId);
 
-      // Обновляем сообщение админа (БЕЗ MARKDOWN!)
+      // Обновляем сообщение админа
       const originalCaption = query.message.caption || '';
-      const baseInfo = originalCaption.split('Подтвердить оплату?')[0];
+      const baseInfo = originalCaption.split('📅')[0]; // Берём всё до даты
       
       await bot.editMessageCaption(
-        `✅ ОПЛАТА ПОДТВЕРЖДЕНА\n\n` +
         baseInfo +
-        `\n✅ Подтвердил: ${query.from.username ? '@' + query.from.username : 'ID: ' + userId}\n` +
+        `\n✅ <b>ПОДТВЕРЖДЕНО</b> ${query.from.username ? '@' + query.from.username : 'ID: ' + userId}\n` +
         `⏰ ${new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' })}`,
         {
           chat_id: chatId,
-          message_id: messageId
-          // БЕЗ parse_mode!
+          message_id: messageId,
+          parse_mode: 'HTML' // ✅ Добавлен parse_mode
         }
       );
 
       await bot.answerCallbackQuery(query.id, { text: '✅ Оплата подтверждена!' });
 
-      // Уведомляем пользователя (НА КАЗАХСКОМ!)
+      // Уведомляем пользователя
       await bot.sendMessage(
         targetUserId,
         `🎉 Төлем расталды!\n\n` +
@@ -919,28 +918,60 @@ bot.on('callback_query', async (query) => {
         }
       );
 
-      // Начисляем дополнительный бонус за оплату реферала
+      // ========================================
+      // 💰 НАЧИСЛЕНИЕ XP ВЛАДЕЛЬЦУ ПРОМОКОДА
+      // ========================================
       const user = await getUserById(targetUserId);
+
+      // Определяем владельца промокода (реферала)
+      let inviterPromoCode = null;
+
       if (user.referredBy) {
-        const inviter = await getUserByPromoCode(user.referredBy);
+        inviterPromoCode = user.referredBy;
+      } else if (user.usedPromoCode) {
+        inviterPromoCode = user.usedPromoCode;
+      }
+
+      // Если есть промокод И бонус ЕЩЁ НЕ ДАВАЛИ
+      if (inviterPromoCode) {
+        const inviter = await getUserByPromoCode(inviterPromoCode);
+        
         if (inviter) {
-          // ✅ +400 XP за оплату (дополнительно к 100 XP при регистрации)
-          await addUserXP(inviter.userId, 400, `Реферал: ${user.name || user.username || targetUserId} купил доступ`);
-          
-          console.log(`💰 Реферал оплатил подписку: ${user.referredBy} → userId ${targetUserId}`);
-          
-          try {
-            await bot.sendMessage(
-              inviter.userId,
-              `🎁 *+400 XP!*\n\n` +
-              `Сіздің досыңыз *${user.name || user.username || 'қолданушы'}* төлем жасады!\n\n` +
-              `💰 Сіз барлығы алдыңыз: 500 XP (100 + 400)`,
-              { parse_mode: 'Markdown' }
+          // ✅ ПРОВЕРКА: давали ли уже +400 XP за оплату этого пользователя
+          if (!user.paymentBonusGiven) {
+            // +400 XP за оплату
+            await addUserXP(
+              inviter.userId, 
+              400, 
+              `Реферал: ${user.name || user.username || targetUserId} оплатил подписку`
             );
-          } catch (e) {
-            console.error('❌ Ошибка уведомления рефереру:', e.message);
+            
+            // ✅ Помечаем что бонус за оплату начислен
+            await updateUserOnboarding(targetUserId, {
+              paymentBonusGiven: true
+            });
+            
+            console.log(`💰 +400 XP владельцу промокода ${inviterPromoCode} (userId: ${inviter.userId}) за оплату userId ${targetUserId}`);
+            
+            try {
+              await bot.sendMessage(
+                inviter.userId,
+                `🎉 *+400 XP!*\n\n` +
+                `${user.name || user.username || `Қолданушы ${targetUserId}`} сіздің промокодыңыз бойынша төлем жасады!\n\n` +
+                `💰 Сіз барлығы алдыңыз: *500 XP* (100 тіркелгені үшін + 400 төлемі үшін)`,
+                { parse_mode: 'Markdown' }
+              );
+            } catch (e) {
+              console.error('❌ Ошибка уведомления владельца промокода:', e.message);
+            }
+          } else {
+            console.log(`ℹ️ Бонус за оплату userId ${targetUserId} уже был начислен ранее`);
           }
+        } else {
+          console.log(`⚠️ Владелец промокода ${inviterPromoCode} не найден`);
         }
+      } else {
+        console.log(`ℹ️ У пользователя ${targetUserId} нет промокода/реферала`);
       }
 
       console.log(`✅ Оплата подтверждена для пользователя ${targetUserId}`);
@@ -1168,33 +1199,33 @@ async function showPayment(chatId, userId, price, hasDiscount) {
     const kaspiLink = process.env.KASPI_LINK || 'https://pay.kaspi.kz/pay/ygtke7vw';
     const user = await getUserById(userId);
 
-    // ✅ НАЧИСЛЯЕМ РЕФЕРАЛЬНЫЙ БОНУС ПОСЛЕ ЗАВЕРШЕНИЯ ОНБОРДИНГА (ОДИН РАЗ)
-    if (user.referredBy && !user.referralBonusGiven) {
-      const inviter = await getUserByPromoCode(user.referredBy);
+    // ✅ НАЧИСЛЯЕМ РЕФЕРАЛЬНЫЙ БОНУС для промокода (введённого вручную)
+    if (user.usedPromoCode && !user.referralBonusGiven && !user.referredBy) {
+      const inviter = await getUserByPromoCode(user.usedPromoCode);
       if (inviter) {
         // Увеличиваем счётчик рефералов
-        await incrementReferralCount(user.referredBy);
+        await incrementReferralCount(user.usedPromoCode);
         
         // Начисляем +100 XP обоим
-        await addUserXP(userId, 100, 'Регистрация по реферальной ссылке');
-        await addUserXP(inviter.userId, 100, `Реферал: ${user.name || user.username || 'Жаңа қолданушы'} зарегистрировался`);
+        await addUserXP(userId, 100, 'Использование промокода');
+        await addUserXP(inviter.userId, 100, `Промокод: ${user.name || user.username || 'Пользователь'} использовал ваш код`);
         
-        // Получаем обновлённые данные рефера (после incrementReferralCount)
+        // Получаем обновлённые данные рефера
         const updatedInviter = await getUserById(inviter.userId);
         
-        // Отправляем уведомление рефереру
+        // Отправляем уведомление владельцу промокода
         try {
           await bot.sendMessage(
             inviter.userId,
-            `🎉 *Жаңа реферал!*\n\n` +
-            `👤 *${user.name || user.username || 'Жаңа қолданушы'}* сіздің промокодыңыз бойынша тіркелді!\n` +
+            `🎉 *Промокод қолданылды!*\n\n` +
+            `👤 *${user.name || user.username || 'Жаңа қолданушы'}* сіздің промокодыңызды енгізді!\n` +
             `🎯 Сіз алдыңыз: +100 XP\n\n` +
-            `Барлық рефералдар: ${updatedInviter.invitedCount} 🔥`,
+            `Барлық қолданушылар: ${updatedInviter.invitedCount} 🔥`,
             { parse_mode: 'Markdown' }
           );
-          console.log(`🎉 Реферальный бонус начислен: ${user.referredBy} → userId ${userId}`);
+          console.log(`🎉 Промокод бонус начислен: ${user.usedPromoCode} → userId ${userId}`);
         } catch (e) {
-          console.error('❌ Ошибка отправки уведомления рефереру:', e.message);
+          console.error('❌ Ошибка отправки уведомления владельцу промокода:', e.message);
         }
         
         // Отмечаем что бонус уже начислен
