@@ -1027,6 +1027,74 @@ async function getFilteredLeaderboard(options = {}) {
   }
 }
 
+/**
+ * Начисление XP за реферала с множителем
+ */
+async function addReferralXP(userId, referredUserId, referredUserName) {
+  try {
+    const db = getDB();
+    const users = db.collection('users');
+    
+    // ✅ Текущая дата в Almaty timezone
+    const almatyOffset = 5 * 60;
+    const now = new Date();
+    const almatyTime = new Date(now.getTime() + (almatyOffset + now.getTimezoneOffset()) * 60000);
+    const todayDateStr = almatyTime.toISOString().split('T')[0];
+    
+    // ✅ Проверка: до 20 марта включительно
+    const eidDate = new Date('2026-03-20T23:59:59+05:00');
+    if (almatyTime > eidDate) {
+      console.log('❌ Реферальные бонусы закончились после 20 марта');
+      return { success: false, reason: 'period_ended' };
+    }
+    
+    const user = await users.findOne({ userId: parseInt(userId) });
+    if (!user) return { success: false, reason: 'user_not_found' };
+    
+    // Инициализируем счетчик рефералов за сегодня
+    const dailyReferrals = user.dailyReferrals || {};
+    const todayCount = (dailyReferrals[todayDateStr] || 0) + 1;
+    
+    // ✅ МНОЖИТЕЛЬ В ЗАВИСИМОСТИ ОТ КОЛИЧЕСТВА ЗА ДЕНЬ
+    let multiplier = 1.0;
+    if (todayCount >= 50) {
+      multiplier = 2.0;
+    } else if (todayCount >= 20) {
+      multiplier = 1.6;
+    } else if (todayCount >= 5) {
+      multiplier = 1.3;
+    }
+    
+    const baseReferralXP = 100; // базовый XP за реферала
+    const finalXP = Math.floor(baseReferralXP * multiplier);
+    
+    await users.updateOne(
+      { userId: parseInt(userId) },
+      {
+        $set: {
+          [`dailyReferrals.${todayDateStr}`]: todayCount,
+          xp: (user.xp || 0) + finalXP,
+          invitedCount: (user.invitedCount || 0) + 1,
+          updatedAt: new Date()
+        }
+      }
+    );
+    
+    console.log(`✅ ${userId} получил ${finalXP} XP (x${multiplier}) за реферала ${referredUserId} (всего сегодня: ${todayCount})`);
+    
+    return { 
+      success: true, 
+      xp: finalXP, 
+      multiplier, 
+      todayCount,
+      referredUserName 
+    };
+  } catch (error) {
+    console.error('Error adding referral XP:', error);
+    return { success: false, reason: 'error' };
+  }
+}
+
 // =====================================================
 // ЭКСПОРТЫ (ТОЛЬКО ОДИН РАЗ!)
 // =====================================================
@@ -1053,5 +1121,6 @@ export {
   getFriendsLeaderboard,
   getCountries,
   getCities,
-  getFilteredLeaderboard
+  getFilteredLeaderboard,
+  addReferralXP
 };
