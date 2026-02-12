@@ -178,7 +178,7 @@ async function getCircleDetails(circleId, requesterId) {
     if (isRamadanStarted) {
       // Рамадан начался - считаем дни Рамадана
       const daysSinceRamadan = Math.floor((almatyTime - ramadanStart) / (1000 * 60 * 60 * 24));
-      currentDayNumber = Math.max(1, Math.min(daysSinceRamadan + 1, 30));
+      currentDayNumber = Math.max(1, Math.min(daysSinceRamadan + 1, 29)); // Максимум 29 дней Рамадана
     } else if (isPreparationStarted) {
       // Подготовка - считаем дни подготовки
       const daysSincePrep = Math.floor((almatyTime - preparationStart) / (1000 * 60 * 60 * 24));
