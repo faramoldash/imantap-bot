@@ -759,29 +759,42 @@ bot.on('callback_query', async (query) => {
   // Обработка кнопки "У меня есть чек"
   // ==========================================
   if (data === 'have_receipt') {
+    console.log('🔵 have_receipt START | userId:', userId);
+    
     try {
+      console.log('🔵 Вызываю answerCallbackQuery...');
       await bot.answerCallbackQuery(query.id);
+      console.log('✅ answerCallbackQuery выполнен');
       
+      console.log('🔵 Отправляю сообщение...');
       await bot.sendMessage(
         chatId,
         `📸 *Төлем чегін жіберіңіз*\n\n` +
-        `Ол мыналар болуы мүмкін:\n` +
+        `Бұл мыналар болуы мүмкін:\n` +
         `• Kaspi-ден скриншот\n` +
-        `• Чектің фотосы\n` +
+        `• Квитанция фотосы\n` +
         `• PDF құжат\n` +
         `• Аударым растамасы\n\n` +
         `Файлды осында жіберіңіз 👇`,
         { parse_mode: 'Markdown' }
       );
+      console.log('✅ Сообщение отправлено');
 
+      console.log('🔵 Устанавливаю state...');
       setState(userId, 'WAITING_RECEIPT');
-      console.log(`✅ have_receipt обработан | userId: ${userId}`);
+      console.log('✅ State установлен');
+      
+      console.log('✅ have_receipt ЗАВЕРШЁН | userId:', userId);
     } catch (error) {
-      console.error('❌ Ошибка have_receipt:', error.message);
-      await bot.answerCallbackQuery(query.id, { 
-        text: '⚠️ Қате орын алды. Қайталап көріңіз.',
-        show_alert: true 
-      });
+      console.error('❌ ОШИБКА have_receipt:', error.message, error.stack);
+      try {
+        await bot.answerCallbackQuery(query.id, { 
+          text: '⚠️ Қате орын алды. Қайталап көріңіз.',
+          show_alert: true 
+        });
+      } catch (e) {
+        console.error('❌ Не удалось отправить alert:', e.message);
+      }
     }
     return;
   }
