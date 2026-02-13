@@ -238,9 +238,9 @@ async function updateUserProgress(userId, progressData) {
         const oldDayData = oldProgress[day] || {};
         
         // ✅ Вычисляем дату этого дня Рамадана
-        const ramadanStart = new Date('2026-02-19T00:00:00+05:00');
-        const dayDate = new Date(ramadanStart);
-        dayDate.setDate(ramadanStart.getDate() + (dayNum - 1));
+        const ramadanStartDate = new Date('2026-02-19T00:00:00');
+        const dayDate = new Date(ramadanStartDate);
+        dayDate.setUTCDate(ramadanStartDate.getUTCDate() + (dayNum - 1));
         const dayDateStr = dayDate.toISOString().split('T')[0];
         
         // ✅ XP только если это СЕГОДНЯ
@@ -282,11 +282,12 @@ async function updateUserProgress(userId, progressData) {
         const newDayData = progressData.preparationProgress[day];
         const oldDayData = oldPrep[day] || {};
         
-        // Вычисляем дату дня подготовки
-        const prepStart = new Date('2026-02-09T00:00:00+05:00');
-        const dayDate = new Date(prepStart);
-        dayDate.setDate(prepStart.getDate() + (dayNum - 1));
-        const dayDateStr = dayDate.toISOString().split('T')[0];
+        // ✅ ИСПРАВЛЕНО: Вычисляем дату дня подготовки
+        // День 1 = 9 февраля 2026, День 2 = 10 февраля, и т.д.
+        const prepStartDate = new Date('2026-02-09T00:00:00');
+        const currentDayDate = new Date(prepStartDate);
+        currentDayDate.setUTCDate(prepStartDate.getUTCDate() + (dayNum - 1));
+        const dayDateStr = currentDayDate.toISOString().split('T')[0];
         
         console.log(`🔍 Preparation день ${dayNum}: dayDateStr=${dayDateStr}, todayDateStr=${todayDateStr}, равны=${dayDateStr === todayDateStr}`);
         
