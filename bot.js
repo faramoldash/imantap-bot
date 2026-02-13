@@ -3007,15 +3007,20 @@ const server = http.createServer(async (req, res) => {
           const progressData = JSON.parse(body);
           
           // Обновляем данные пользователя
-          const success = await updateUserProgress(userId, progressData);
-          
-          if (success) {
-            console.log(`✅ Прогресс синхронизирован для пользователя ${userId}`);
+          const result = await updateUserProgress(userId, progressData);
+
+          if (result && result.success) {
+            console.log(`✅ Прогресс синхронизирован для пользователя ${userId}, начислено: ${result.xpAdded} XP`);
             
-            // Возвращаем обновлённые данные
+            // Возвращаем обновлённые данные + информацию о начисленном XP
             const updatedData = await getUserFullData(userId);
             res.statusCode = 200;
-            res.end(JSON.stringify({ success: true, data: updatedData }));
+            res.end(JSON.stringify({ 
+              success: true, 
+              data: updatedData,
+              xpAdded: result.xpAdded || 0,
+              streakMultiplier: result.streakMultiplier || 1.0
+            }));
           } else {
             console.error(`❌ Не удалось обновить данные для ${userId}`);
             res.statusCode = 500;

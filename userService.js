@@ -402,8 +402,26 @@ async function updateUserProgress(userId, progressData) {
     
     if (result.modifiedCount > 0 || xpToAdd > 0) {
       console.log(`✅ Прогресс обновлен для userId: ${userId}, начислено XP: ${xpToAdd}`);
-      return true;
+      
+      // ✅ Возвращаем данные о начисленном XP
+      const currentStreak = hasActivityToday ? newStreak : (oldUser.currentStreak || 0);
+      const streakMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
+      
+      return {
+        success: true,
+        xpAdded: xpToAdd,
+        streakMultiplier: xpToAdd > 0 ? streakMultiplier : 1.0,
+        currentStreak: currentStreak
+      };
     }
+
+    console.log('⚠️ Прогресс не изменился для userId:', userId);
+    return {
+      success: true,
+      xpAdded: 0,
+      streakMultiplier: 1.0,
+      currentStreak: oldUser.currentStreak || 0
+    };
     
     console.log('⚠️ Прогресс не изменился для userId:', userId);
     return false;
