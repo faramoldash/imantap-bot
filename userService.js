@@ -211,14 +211,6 @@ async function updateUserProgress(userId, progressData) {
     const almatyTime = new Date(now.getTime() + (almatyOffset + now.getTimezoneOffset()) * 60000);
     const todayDateStr = almatyTime.toISOString().split('T')[0];
     
-    console.log('🔍 DEBUG updateUserProgress:', {
-      userId,
-      todayDateStr,
-      hasProgress: !!progressData.progress,
-      hasPreparation: !!progressData.preparationProgress,
-      hasBasic: !!progressData.basicProgress
-    });
-    
     // ✅ Получаем СТАРЫЕ данные из БД
     const oldUser = await usersCollection.findOne({ userId: parseInt(userId) });
     if (!oldUser) {
@@ -274,7 +266,6 @@ async function updateUserProgress(userId, progressData) {
     
     // Проверяем Preparation прогресс
     if (progressData.preparationProgress) {
-      console.log('🔍 Preparation дни которые пришли:', Object.keys(progressData.preparationProgress));
       
       const oldPrep = oldUser.preparationProgress || {};
       for (const day in progressData.preparationProgress) {
@@ -289,16 +280,9 @@ async function updateUserProgress(userId, progressData) {
         currentDayDate.setUTCDate(prepStartDate.getUTCDate() + (dayNum - 1));
         const dayDateStr = currentDayDate.toISOString().split('T')[0];
         
-        console.log(`🔍 Preparation день ${dayNum}: dayDateStr=${dayDateStr}, todayDateStr=${todayDateStr}, равны=${dayDateStr === todayDateStr}`);
-        
         const isToday = dayDateStr === todayDateStr;
         
         if (isToday) {
-          console.log(`🔍 Preparation день ${dayNum}, дата ${dayDateStr} = СЕГОДНЯ!`, {
-            newDayData,
-            oldDayData
-          });
-          
           for (const taskKey in newDayData) {
             if (newDayData[taskKey] === true && !oldDayData[taskKey]) {
               const baseXP = XP_VALUES[taskKey] || 10;
@@ -323,12 +307,7 @@ async function updateUserProgress(userId, progressData) {
         
         const isToday = dateKey === todayDateStr;
         
-        if (isToday) {
-          console.log(`🔍 Basic день ${dateKey} = СЕГОДНЯ!`, {
-            newDayData,
-            oldDayData
-          });
-          
+        if (isToday) {          
           for (const taskKey in newDayData) {
             if (newDayData[taskKey] === true && !oldDayData[taskKey]) {
               const baseXP = XP_VALUES[taskKey] || 10;
