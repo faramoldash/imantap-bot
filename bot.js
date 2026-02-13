@@ -3256,6 +3256,103 @@ bot.onText(/\/admin_geo/, async (msg) => {
   }
 });
 
+// 📍 Рассылка для пользователей БЕЗ геолокации
+bot.onText(/\/admin_notify_no_geo/, async (msg) => {
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+
+  if (!isMainAdmin(userId)) {
+    return bot.sendMessage(chatId, '❌ Команда доступна только админу');
+  }
+
+  try {
+    const db = getDB();
+    const users = db.collection('users');
+
+    // Находим пользователей БЕЗ геолокации, но с завершённым онбордингом
+    const usersWithoutGeo = await users.find({
+      paymentStatus: { $in: ['paid', 'demo'] },
+      $or: [
+        { 'location.city': null },
+        { 'location.city': { $exists: false } },
+        { 'location.city': '' }
+      ]
+    }).toArray();
+
+    if (usersWithoutGeo.length === 0) {
+      return bot.sendMessage(chatId, '✅ Все активные пользователи уже поделились геолокацией!');
+    }
+
+    await bot.sendMessage(
+      chatId, 
+      `📢 Найдено ${usersWithoutGeo.length} пользователей без геолокации.\n\nНачинаю рассылку...`
+    );
+
+    let sent = 0;
+    let failed = 0;
+
+    for (const user of usersWithoutGeo) {
+      try {
+        const message = 
+          `🔔 *Маңызды хабарландыру!*\n\n` +
+          `Ауыз ашу/бекіту уақыттары туралы хабарландыруларды дұрыс алу үшін геолокацияңызбен бөлісу керек.\n\n` +
+          `📍 *Қалай жасау керек:*\n` +
+          `1️⃣ Төмендегі "⚙️ Баптаулар" батырмасын басыңыз\n` +
+          `2️⃣ "📍 Қаланы өзгерту" таңдаңыз\n` +
+          `3️⃣ Геолокацияңызды жіберіңіз\n\n` +
+          `✅ Бұдан кейін сіз дұрыс уақытта хабарландырулар аласыз!\n\n` +
+          `Бұл тек 10 секунд алады 🕐`;
+
+        await bot.sendMessage(user.userId, message, {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            keyboard: [
+              ['⚙️ Баптаулар'],
+              [{
+                text: '📱 ImanTap ашу',
+                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${user.userId}` }
+              }],
+              ['📊 Статистика', '🎁 Менің промокодым']
+            ],
+            resize_keyboard: true
+          }
+        });
+
+        sent++;
+        
+        // Задержка 100мс между сообщениями
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        // Отчёт каждые 20 сообщений
+        if (sent % 20 === 0) {
+          await bot.sendMessage(chatId, `📊 Отправлено: ${sent}/${usersWithoutGeo.length}`);
+        }
+
+      } catch (error) {
+        failed++;
+        console.error(`❌ Не удалось отправить userId ${user.userId}:`, error.message);
+      }
+    }
+
+    const finalMessage = 
+      `✅ *Рассылка завершена!*\n\n` +
+      `👥 Пользователей без гео: ${usersWithoutGeo.length}\n` +
+      `📤 Отправлено: ${sent}\n` +
+      `❌ Ошибок: ${failed}\n\n` +
+      `📊 Список пользователей без гео:\n` +
+      usersWithoutGeo.slice(0, 10).map(u => 
+        `• ${u.name || u.username || 'Аноним'} (ID: ${u.userId})`
+      ).join('\n') +
+      (usersWithoutGeo.length > 10 ? `\n... и ещё ${usersWithoutGeo.length - 10}` : '');
+
+    await bot.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
+
+  } catch (error) {
+    console.error('❌ Ошибка рассылки:', error);
+    bot.sendMessage(chatId, '❌ Ошибка при рассылке');
+  }
+});
+
 // ===== HTTP API СЕРВЕР =====
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://localhost:${PORT}`);
