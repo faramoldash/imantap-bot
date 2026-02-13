@@ -274,6 +274,8 @@ async function updateUserProgress(userId, progressData) {
     
     // Проверяем Preparation прогресс
     if (progressData.preparationProgress) {
+      console.log('🔍 Preparation дни которые пришли:', Object.keys(progressData.preparationProgress));
+      
       const oldPrep = oldUser.preparationProgress || {};
       for (const day in progressData.preparationProgress) {
         const dayNum = parseInt(day);
@@ -285,6 +287,8 @@ async function updateUserProgress(userId, progressData) {
         const dayDate = new Date(prepStart);
         dayDate.setDate(prepStart.getDate() + (dayNum - 1));
         const dayDateStr = dayDate.toISOString().split('T')[0];
+        
+        console.log(`🔍 Preparation день ${dayNum}: dayDateStr=${dayDateStr}, todayDateStr=${todayDateStr}, равны=${dayDateStr === todayDateStr}`);
         
         const isToday = dayDateStr === todayDateStr;
         
