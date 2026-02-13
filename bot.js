@@ -936,16 +936,9 @@ bot.on('callback_query', async (query) => {
       // Если есть промокод И бонус ЕЩЁ НЕ ДАВАЛИ
       if (inviterPromoCode) {
         const inviter = await getUserByPromoCode(inviterPromoCode);
-        
-        if (inviter) {
-          // ✅ ПРОВЕРКА: давали ли уже +400 XP за оплату этого пользователя
+        if (inviter) { // 400 XP за оплату реферала
           if (!user.paymentBonusGiven) {
-            // ✅ +400 XP за оплату с бонусами
-            const referralResult = await addReferralXP(
-              inviter.userId, 
-              targetUserId, 
-              user.name || user.username || targetUserId
-            );
+            const referralResult = await addReferralXP(inviter.userId, 'payment', targetUserId, user.name || user.username || `${targetUserId}`);
             
             // ✅ Помечаем что бонус за оплату начислен
             await updateUserOnboarding(targetUserId, {
@@ -1216,29 +1209,32 @@ async function showPayment(chatId, userId, price, hasDiscount) {
     if (user.referredBy && !user.referralBonusGiven) {
       const inviter = await getUserByPromoCode(user.referredBy);
       if (inviter) {
-        // Увеличиваем счётчик рефералов
-        await incrementReferralCount(user.referredBy);
+        // ✅ Начисляем XP за регистрацию (100-200 XP с множителями)
+        const referralResult = await addReferralXP(inviter.userId, 'registration', userId, user.name || user.username);
         
-        // Начисляем +100 XP обоим
+        // ✅ Бонус новому пользователю
         await addUserXP(userId, 100, 'Регистрация по реферальной ссылке');
-        await addUserXP(inviter.userId, 100, `Реферал: ${user.name || user.username || 'Жаңа қолданушы'} тіркелді`);
         
-        // Получаем обновлённые данные рефера
-        const updatedInviter = await getUserById(inviter.userId);
-        
-        // Отправляем уведомление рефереру
-        try {
-          await bot.sendMessage(
-            inviter.userId,
-            `🎉 *Жаңа реферал!*\n\n` +
-            `👤 *${user.name || user.username || 'Жаңа қолданушы'}* сіздің промокодыңыз бойынша тіркелді!\n` +
-            `🎯 Сіз алдыңыз: +100 XP\n\n` +
-            `Барлық рефералдар: ${updatedInviter.invitedCount} 🔥`,
-            { parse_mode: 'Markdown' }
-          );
-          console.log(`🎉 Реферальный бонус начислен: ${user.referredBy} → userId ${userId}`);
-        } catch (e) {
-          console.error('❌ Ошибка отправки уведомления рефереру:', e.message);
+        // ✅ ОТПРАВЛЯЕМ УВЕДОМЛЕНИЕ рефереру
+        if (referralResult.success) {
+          try {
+            const updatedInviter = await getUserById(inviter.userId);
+            let bonusText = '';
+            if (referralResult.multiplier > 1.0) {
+              bonusText = ` (x${referralResult.multiplier}🔥! ${referralResult.todayCount}-ші реферал бүгін)`;
+            }
+            
+            await bot.sendMessage(
+              inviter.userId,
+              `🎉 *Жаңа реферал!*\n\n` +
+              `👤 *${user.name || user.username || 'Жаңа қолданушы'}* сіздің сілтемеңіз бойынша тіркелді!\n` +
+              `🎯 Сіз алдыңыз: +${referralResult.xp} XP${bonusText}\n\n` +
+              `Барлық рефералдар: ${updatedInviter.invitedCount} 🔥`,
+              { parse_mode: 'Markdown' }
+            );
+          } catch (e) {
+            console.error('❌ Ошибка отправки уведомления рефереру:', e.message);
+          }
         }
         
         // Отмечаем что бонус уже начислен
@@ -1252,29 +1248,32 @@ async function showPayment(chatId, userId, price, hasDiscount) {
     if (user.usedPromoCode && !user.referralBonusGiven && !user.referredBy) {
       const inviter = await getUserByPromoCode(user.usedPromoCode);
       if (inviter) {
-        // Увеличиваем счётчик рефералов
-        await incrementReferralCount(user.usedPromoCode);
+        // ✅ Начисляем XP за регистрацию (100-200 XP с множителями)
+        const referralResult = await addReferralXP(inviter.userId, 'registration', userId, user.name || user.username);
         
-        // Начисляем +100 XP обоим
+        // ✅ Бонус новому пользователю
         await addUserXP(userId, 100, 'Использование промокода');
-        await addUserXP(inviter.userId, 100, `Промокод: ${user.name || user.username || 'Пользователь'} использовал ваш код`);
         
-        // Получаем обновлённые данные рефера
-        const updatedInviter = await getUserById(inviter.userId);
-        
-        // Отправляем уведомление владельцу промокода
-        try {
-          await bot.sendMessage(
-            inviter.userId,
-            `🎉 *Промокод қолданылды!*\n\n` +
-            `👤 *${user.name || user.username || 'Жаңа қолданушы'}* сіздің промокодыңызды енгізді!\n` +
-            `🎯 Сіз алдыңыз: +100 XP\n\n` +
-            `Барлық қолданушылар: ${updatedInviter.invitedCount} 🔥`,
-            { parse_mode: 'Markdown' }
-          );
-          console.log(`🎉 Промокод бонус начислен: ${user.usedPromoCode} → userId ${userId}`);
-        } catch (e) {
-          console.error('❌ Ошибка отправки уведомления владельцу промокода:', e.message);
+        // ✅ ОТПРАВЛЯЕМ УВЕДОМЛЕНИЕ владельцу промокода
+        if (referralResult.success) {
+          try {
+            const updatedInviter = await getUserById(inviter.userId);
+            let bonusText = '';
+            if (referralResult.multiplier > 1.0) {
+              bonusText = ` (x${referralResult.multiplier}🔥! ${referralResult.todayCount}-ші реферал бүгін)`;
+            }
+            
+            await bot.sendMessage(
+              inviter.userId,
+              `🎉 *Промокод қолданылды!*\n\n` +
+              `👤 *${user.name || user.username || 'Жаңа қолданушы'}* сіздің промокодыңызды енгізді!\n` +
+              `🎯 Сіз алдыңыз: +${referralResult.xp} XP${bonusText}\n\n` +
+              `Барлық қолданушылар: ${updatedInviter.invitedCount} 🔥`,
+              { parse_mode: 'Markdown' }
+            );
+          } catch (e) {
+            console.error('❌ Ошибка отправки уведомления владельцу промокода:', e.message);
+          }
         }
         
         // Отмечаем что бонус уже начислен

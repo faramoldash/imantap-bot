@@ -650,8 +650,12 @@ async function approvePayment(userId) {
   
   await users.updateOne({ userId }, { $set: updateData });
   
+  // ✅ НАЧИСЛЯЕМ XP РЕФЕРЕРУ ЗА ОПЛАТУ
   if (user.referredBy) {
-    await incrementReferralCount(user.referredBy);
+    const referrer = await users.findOne({ promoCode: user.referredBy });
+    if (referrer) {
+      await addReferralXP(referrer.userId, 'payment', userId, user.name);
+    }
   }
   
   console.log(`✅ Оплата подтверждена для пользователя ${userId}`);
@@ -1146,9 +1150,13 @@ async function getFilteredLeaderboard(options = {}) {
 }
 
 /**
- * Начисление XP за реферала с множителем
+ * Начисление XP за реферала
+ * @param {number} userId - ID реферера
+ * @param {string} type - 'registration' или 'payment'
+ * @param {number} referredUserId - ID реферала
+ * @param {string} referredUserName - Имя реферала
  */
-async function addReferralXP(userId, referredUserId, referredUserName) {
+async function addReferralXP(userId, type = 'registration', referredUserId = null, referredUserName = null) {
   try {
     const db = getDB();
     const users = db.collection('users');
@@ -1169,46 +1177,64 @@ async function addReferralXP(userId, referredUserId, referredUserName) {
     const user = await users.findOne({ userId: parseInt(userId) });
     if (!user) return { success: false, reason: 'user_not_found' };
     
-    // Инициализируем счетчик рефералов за сегодня
-    const dailyReferrals = user.dailyReferrals || {};
-    const todayCount = (dailyReferrals[todayDateStr] || 0) + 1;
-    
-    // ✅ МНОЖИТЕЛЬ В ЗАВИСИМОСТИ ОТ КОЛИЧЕСТВА ЗА ДЕНЬ
+    let finalXP = 0;
     let multiplier = 1.0;
-    if (todayCount >= 50) {
-      multiplier = 2.0;
-    } else if (todayCount >= 20) {
-      multiplier = 1.6;
-    } else if (todayCount >= 5) {
-      multiplier = 1.3;
+    let todayCount = 0;
+    
+    if (type === 'payment') {
+      // ✅ За ОПЛАТУ реферала - всегда 400 XP (БЕЗ множителей!)
+      finalXP = 400;
+      console.log(`💰 Реферал ${referredUserId} оплатил подписку → +400 XP для реферера ${userId}`);
+      
+    } else {
+      // ✅ За РЕГИСТРАЦИЮ (приглашение) - с множителями
+      const dailyReferrals = user.dailyReferrals || {};
+      todayCount = (dailyReferrals[todayDateStr] || 0) + 1;
+      
+      // Определяем множитель по количеству рефералов за сегодня
+      if (todayCount >= 50) {
+        multiplier = 2.0;
+      } else if (todayCount >= 20) {
+        multiplier = 1.6;
+      } else if (todayCount >= 5) {
+        multiplier = 1.3;
+      }
+      
+      const baseRegistrationXP = 100;
+      finalXP = Math.floor(baseRegistrationXP * multiplier);
+      
+      console.log(`👥 Новый реферал #${todayCount} сегодня → +${finalXP} XP (x${multiplier.toFixed(1)}) для реферера ${userId}`);
     }
     
-    const baseReferralXP = 100; // базовый XP за реферала
-    const finalXP = Math.floor(baseReferralXP * multiplier);
+    // ✅ Обновляем пользователя
+    const updateData = {
+      xp: (user.xp || 0) + finalXP,
+      updatedAt: new Date()
+    };
+    
+    // Только для регистрации увеличиваем счётчики
+    if (type === 'registration') {
+      updateData[`dailyReferrals.${todayDateStr}`] = todayCount;
+      updateData.invitedCount = (user.invitedCount || 0) + 1;
+    }
     
     await users.updateOne(
       { userId: parseInt(userId) },
-      {
-        $set: {
-          [`dailyReferrals.${todayDateStr}`]: todayCount,
-          xp: (user.xp || 0) + finalXP,
-          invitedCount: (user.invitedCount || 0) + 1,
-          updatedAt: new Date()
-        }
-      }
+      { $set: updateData }
     );
     
-    console.log(`✅ ${userId} получил ${finalXP} XP (x${multiplier}) за реферала ${referredUserId} (всего сегодня: ${todayCount})`);
+    console.log(`✅ Реферер ${userId}: теперь ${updateData.xp} XP`);
     
     return { 
       success: true, 
       xp: finalXP, 
-      multiplier, 
-      todayCount,
-      referredUserName 
+      multiplier: type === 'payment' ? 1.0 : multiplier, 
+      todayCount: type === 'registration' ? todayCount : 0,
+      referredUserName,
+      type
     };
   } catch (error) {
-    console.error('Error adding referral XP:', error);
+    console.error('❌ Error adding referral XP:', error);
     return { success: false, reason: 'error' };
   }
 }
