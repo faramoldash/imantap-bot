@@ -2889,6 +2889,373 @@ bot.onText(/\/checkdemo/, async (msg) => {
   }
 });
 
+// =====================================================
+// 🔐 АДМИН-КОМАНДЫ ДЛЯ АНАЛИТИКИ
+// =====================================================
+
+// Проверка: является ли пользователь главным админом
+function isMainAdmin(userId) {
+  const MAIN_ADMIN = parseInt(process.env.MAIN_ADMIN_ID);
+  return userId === MAIN_ADMIN;
+}
+
+// 📊 Общая статистика
+bot.onText(/\/admin_stats/, async (msg) => {
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+
+  if (!isMainAdmin(userId)) {
+    return bot.sendMessage(chatId, '❌ Команда доступна только админу');
+  }
+
+  try {
+    const db = getDB();
+    const users = db.collection('users');
+
+    // Сегодняшняя дата в Almaty timezone
+    const almatyOffset = 5 * 60;
+    const now = new Date();
+    const almatyTime = new Date(now.getTime() + (almatyOffset + now.getTimezoneOffset()) * 60000);
+    const todayStart = new Date(almatyTime);
+    todayStart.setHours(0, 0, 0, 0);
+
+    // Основные метрики
+    const totalUsers = await users.countDocuments({});
+    const paidUsers = await users.countDocuments({ paymentStatus: 'paid' });
+    const demoUsers = await users.countDocuments({ accessType: 'demo' });
+    const pendingPayments = await users.countDocuments({ paymentStatus: 'pending' });
+
+    // Сегодня
+    const newToday = await users.countDocuments({ 
+      createdAt: { $gte: todayStart } 
+    });
+    const paidToday = await users.countDocuments({ 
+      paymentStatus: 'paid',
+      paymentDate: { $gte: todayStart } 
+    });
+
+    // Доход
+    const paidUsersData = await users.find({ paymentStatus: 'paid' }).toArray();
+    const totalRevenue = paidUsersData.reduce((sum, u) => sum + (u.paidAmount || 0), 0);
+    const revenueToday = paidUsersData
+      .filter(u => u.paymentDate && new Date(u.paymentDate) >= todayStart)
+      .reduce((sum, u) => sum + (u.paidAmount || 0), 0);
+
+    // Активность (кто заходил за последние 24 часа)
+    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const activeUsers = await users.countDocuments({
+      updatedAt: { $gte: yesterday }
+    });
+
+    // Средний XP
+    const allUsers = await users.find({}).toArray();
+    const avgXP = allUsers.reduce((sum, u) => sum + (u.xp || 0), 0) / totalUsers;
+
+    // Конверсия
+    const conversionRate = ((paidUsers / totalUsers) * 100).toFixed(1);
+
+    const message = `📊 *ImanTap Статистика*\n\n` +
+      `👥 *Всего пользователей:* ${totalUsers}\n` +
+      `✅ *Оплативших:* ${paidUsers} (${conversionRate}%)\n` +
+      `🎯 *Демо:* ${demoUsers}\n` +
+      `⏳ *На проверке:* ${pendingPayments}\n` +
+      `💰 *Общий доход:* ${totalRevenue.toLocaleString()}₸\n\n` +
+      `📈 *Сегодня:*\n` +
+      `• Новых: ${newToday}\n` +
+      `• Оплат: ${paidToday}\n` +
+      `• Доход: ${revenueToday.toLocaleString()}₸\n\n` +
+      `🔥 *Активность:*\n` +
+      `• Активных за 24ч: ${activeUsers} (${((activeUsers/totalUsers)*100).toFixed(1)}%)\n` +
+      `• Средний XP: ${Math.round(avgXP).toLocaleString()}\n\n` +
+      `🕐 Обновлено: ${almatyTime.toLocaleTimeString('ru-RU')}`;
+
+    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('❌ Ошибка /admin_stats:', error);
+    bot.sendMessage(chatId, '❌ Ошибка получения статистики');
+  }
+});
+
+// 🔄 Воронка конверсии
+bot.onText(/\/admin_conversion/, async (msg) => {
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+
+  if (!isMainAdmin(userId)) {
+    return bot.sendMessage(chatId, '❌ Команда доступна только админу');
+  }
+
+  try {
+    const db = getDB();
+    const users = db.collection('users');
+
+    const total = await users.countDocuments({});
+    const withPhone = await users.countDocuments({ phoneNumber: { $ne: null } });
+    const withLocation = await users.countDocuments({ 'location.city': { $ne: null } });
+    const completedOnboarding = await users.countDocuments({ onboardingCompleted: true });
+    const sentReceipt = await users.countDocuments({ paymentStatus: { $in: ['pending', 'paid'] } });
+    const paid = await users.countDocuments({ paymentStatus: 'paid' });
+
+    const message = `🔄 *Воронка конверсии*\n\n` +
+      `1️⃣ Зашли в бота: *${total}* (100%)\n` +
+      `     ↓ ${((withPhone/total)*100).toFixed(1)}%\n\n` +
+      `2️⃣ Указали телефон: *${withPhone}* (${((withPhone/total)*100).toFixed(1)}%)\n` +
+      `     ↓ ${((withLocation/withPhone)*100).toFixed(1)}%\n\n` +
+      `3️⃣ Указали геолокацию: *${withLocation}* (${((withLocation/total)*100).toFixed(1)}%)\n` +
+      `     ↓ ${((completedOnboarding/withLocation)*100).toFixed(1)}%\n\n` +
+      `4️⃣ Завершили онбординг: *${completedOnboarding}* (${((completedOnboarding/total)*100).toFixed(1)}%)\n` +
+      `     ↓ ${((sentReceipt/completedOnboarding)*100).toFixed(1)}%\n\n` +
+      `5️⃣ Отправили чек: *${sentReceipt}* (${((sentReceipt/total)*100).toFixed(1)}%)\n` +
+      `     ↓ ${sentReceipt > 0 ? ((paid/sentReceipt)*100).toFixed(1) : 0}%\n\n` +
+      `6️⃣ Оплатили: *${paid}* (${((paid/total)*100).toFixed(1)}%)\n\n` +
+      `💡 *Главная проблема:* `;
+
+    // Находим самое слабое место
+    const drops = [
+      { step: 'Телефон', rate: (withPhone/total)*100 },
+      { step: 'Геолокация', rate: (withLocation/withPhone)*100 },
+      { step: 'Онбординг', rate: (completedOnboarding/withLocation)*100 },
+      { step: 'Чек', rate: (sentReceipt/completedOnboarding)*100 },
+      { step: 'Оплата', rate: sentReceipt > 0 ? (paid/sentReceipt)*100 : 0 }
+    ];
+
+    const worstDrop = drops.sort((a, b) => a.rate - b.rate)[0];
+    const finalMessage = message + `${worstDrop.step} (${worstDrop.rate.toFixed(1)}% проходят)`;
+
+    bot.sendMessage(chatId, finalMessage, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('❌ Ошибка /admin_conversion:', error);
+    bot.sendMessage(chatId, '❌ Ошибка получения воронки');
+  }
+});
+
+// 👥 Топ рефереров
+bot.onText(/\/admin_referrals/, async (msg) => {
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+
+  if (!isMainAdmin(userId)) {
+    return bot.sendMessage(chatId, '❌ Команда доступна только админу');
+  }
+
+  try {
+    const db = getDB();
+    const users = db.collection('users');
+
+    // Топ-10 по количеству рефералов
+    const topReferrers = await users.find({ invitedCount: { $gt: 0 } })
+      .sort({ invitedCount: -1 })
+      .limit(10)
+      .toArray();
+
+    // Статистика
+    const totalReferrals = await users.countDocuments({ 
+      $or: [{ referredBy: { $ne: null } }, { usedPromoCode: { $ne: null } }]
+    });
+    const paidReferrals = await users.countDocuments({ 
+      paymentStatus: 'paid',
+      $or: [{ referredBy: { $ne: null } }, { usedPromoCode: { $ne: null } }]
+    });
+
+    let message = `👥 *Топ-10 Рефереров*\n\n`;
+
+    topReferrers.forEach((user, index) => {
+      const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+      message += `${medal} *${user.name || user.username || 'Аноним'}*\n`;
+      message += `   Приглашено: ${user.invitedCount} | XP: ${user.xp || 0}\n`;
+      message += `   Промокод: \`${user.promoCode}\`\n\n`;
+    });
+
+    message += `📊 *Общая статистика:*\n`;
+    message += `• Всего по рефералам: ${totalReferrals}\n`;
+    message += `• Оплатили: ${paidReferrals} (${totalReferrals > 0 ? ((paidReferrals/totalReferrals)*100).toFixed(1) : 0}%)\n`;
+    message += `• Средний виральный коэф: ${(totalReferrals / (await users.countDocuments({}))).toFixed(2)}`;
+
+    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('❌ Ошибка /admin_referrals:', error);
+    bot.sendMessage(chatId, '❌ Ошибка получения рефералов');
+  }
+});
+
+// 💰 Финансы
+bot.onText(/\/admin_finance/, async (msg) => {
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+
+  if (!isMainAdmin(userId)) {
+    return bot.sendMessage(chatId, '❌ Команда доступна только админу');
+  }
+
+  try {
+    const db = getDB();
+    const users = db.collection('users');
+
+    const paidUsers = await users.find({ paymentStatus: 'paid' }).toArray();
+    
+    // Общий доход
+    const totalRevenue = paidUsers.reduce((sum, u) => sum + (u.paidAmount || 0), 0);
+    
+    // Средний чек
+    const avgCheck = totalRevenue / paidUsers.length;
+    
+    // Со скидкой vs без
+    const withDiscount = paidUsers.filter(u => u.hasDiscount).length;
+    const withoutDiscount = paidUsers.length - withDiscount;
+    
+    const revenueWithDiscount = paidUsers
+      .filter(u => u.hasDiscount)
+      .reduce((sum, u) => sum + (u.paidAmount || 0), 0);
+    const revenueWithoutDiscount = totalRevenue - revenueWithDiscount;
+
+    // За последние 7 дней
+    const week = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const revenueWeek = paidUsers
+      .filter(u => u.paymentDate && new Date(u.paymentDate) >= week)
+      .reduce((sum, u) => sum + (u.paidAmount || 0), 0);
+
+    // За последние 30 дней (MRR)
+    const month = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const revenueMonth = paidUsers
+      .filter(u => u.paymentDate && new Date(u.paymentDate) >= month)
+      .reduce((sum, u) => sum + (u.paidAmount || 0), 0);
+
+    const message = `💰 *Финансовая статистика*\n\n` +
+      `💵 *Общий доход:* ${totalRevenue.toLocaleString()}₸\n` +
+      `📊 *Оплат всего:* ${paidUsers.length}\n` +
+      `💳 *Средний чек:* ${Math.round(avgCheck).toLocaleString()}₸\n\n` +
+      `🎁 *Со скидкой:*\n` +
+      `   ${withDiscount} шт (${((withDiscount/paidUsers.length)*100).toFixed(1)}%) → ${revenueWithDiscount.toLocaleString()}₸\n\n` +
+      `💎 *Без скидки:*\n` +
+      `   ${withoutDiscount} шт (${((withoutDiscount/paidUsers.length)*100).toFixed(1)}%) → ${revenueWithoutDiscount.toLocaleString()}₸\n\n` +
+      `📅 *За период:*\n` +
+      `• 7 дней: ${revenueWeek.toLocaleString()}₸\n` +
+      `• 30 дней (MRR): ${revenueMonth.toLocaleString()}₸\n\n` +
+      `📈 *Прогноз MRR:* ${(revenueMonth * (30/30)).toLocaleString()}₸/мес`;
+
+    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('❌ Ошибка /admin_finance:', error);
+    bot.sendMessage(chatId, '❌ Ошибка получения финансов');
+  }
+});
+
+// 📈 Рост
+bot.onText(/\/admin_growth/, async (msg) => {
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+
+  if (!isMainAdmin(userId)) {
+    return bot.sendMessage(chatId, '❌ Команда доступна только админу');
+  }
+
+  try {
+    const db = getDB();
+    const users = db.collection('users');
+
+    const now = new Date();
+    const periods = [
+      { name: 'Сегодня', days: 0 },
+      { name: 'Вчера', days: 1 },
+      { name: '7 дней назад', days: 7 },
+      { name: '30 дней назад', days: 30 }
+    ];
+
+    let message = `📈 *Рост пользователей*\n\n`;
+
+    for (const period of periods) {
+      const date = new Date(now);
+      date.setDate(date.getDate() - period.days);
+      date.setHours(0, 0, 0, 0);
+      
+      const nextDay = new Date(date);
+      nextDay.setDate(date.getDate() + 1);
+
+      const count = await users.countDocuments({
+        createdAt: { $gte: date, $lt: nextDay }
+      });
+
+      const paid = await users.countDocuments({
+        createdAt: { $gte: date, $lt: nextDay },
+        paymentStatus: 'paid'
+      });
+
+      message += `📅 *${period.name}:* ${count} новых`;
+      if (paid > 0) {
+        message += ` (${paid} оплатили)`;
+      }
+      message += `\n`;
+    }
+
+    // Средний рост
+    const week = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const usersWeek = await users.countDocuments({ createdAt: { $gte: week } });
+    const avgPerDay = (usersWeek / 7).toFixed(1);
+
+    message += `\n📊 *Среднее за неделю:* ${avgPerDay} юзеров/день\n`;
+    message += `🎯 *Прогноз на месяц:* ~${Math.round(avgPerDay * 30)} новых`;
+
+    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('❌ Ошибка /admin_growth:', error);
+    bot.sendMessage(chatId, '❌ Ошибка получения роста');
+  }
+});
+
+// 🌍 География
+bot.onText(/\/admin_geo/, async (msg) => {
+  const userId = msg.from.id;
+  const chatId = msg.chat.id;
+
+  if (!isMainAdmin(userId)) {
+    return bot.sendMessage(chatId, '❌ Команда доступна только админу');
+  }
+
+  try {
+    const db = getDB();
+    const users = db.collection('users');
+
+    // Топ стран
+    const allUsers = await users.find({ 'location.country': { $ne: null } }).toArray();
+    
+    const countryCounts = {};
+    const cityCounts = {};
+
+    allUsers.forEach(user => {
+      const country = user.location?.country || 'Unknown';
+      const city = user.location?.city || 'Unknown';
+      
+      countryCounts[country] = (countryCounts[country] || 0) + 1;
+      cityCounts[city] = (cityCounts[city] || 0) + 1;
+    });
+
+    const topCountries = Object.entries(countryCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5);
+
+    const topCities = Object.entries(cityCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10);
+
+    let message = `🌍 *География пользователей*\n\n`;
+    message += `🌎 *Топ-5 стран:*\n`;
+    topCountries.forEach(([country, count], i) => {
+      const emoji = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '  ';
+      message += `${emoji} ${country}: ${count} (${((count/allUsers.length)*100).toFixed(1)}%)\n`;
+    });
+
+    message += `\n🏙 *Топ-10 городов:*\n`;
+    topCities.forEach(([city, count], i) => {
+      message += `${i+1}. ${city}: ${count}\n`;
+    });
+
+    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('❌ Ошибка /admin_geo:', error);
+    bot.sendMessage(chatId, '❌ Ошибка получения географии');
+  }
+});
+
 // ===== HTTP API СЕРВЕР =====
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://localhost:${PORT}`);
