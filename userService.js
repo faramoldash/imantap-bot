@@ -27,7 +27,9 @@ const XP_VALUES = {
   charity: 100,
   names99: 50,
   lessons: 50,
-  book: 50
+  book: 50,
+  // 99 имён Аллаха (обрабатывается отдельно)
+  singleName: 100 // За каждое заученное имя
 };
 
 /**
@@ -356,6 +358,32 @@ async function updateUserProgress(userId, progressData) {
             }
           }
         }
+      }
+    }
+
+    // ✅ Проверяем заучивание имён Аллаха (99 имён)
+    if (progressData.memorizedNames) {
+      const oldMemorized = oldUser.memorizedNames || [];
+      const newMemorized = progressData.memorizedNames || [];
+      
+      // Находим НОВЫЕ имена (которых не было в старом массиве)
+      const newlyMemorized = newMemorized.filter(id => !oldMemorized.includes(id));
+      
+      if (newlyMemorized.length > 0) {
+        const baseNameXP = 100; // 100 XP за каждое имя
+        const nameXPToAdd = newlyMemorized.length * baseNameXP;
+        
+        // ✅ XP за имена НЕ умножаются на streak - это отдельная активность
+        xpToAdd += nameXPToAdd;
+        
+        console.log(`📿 +${nameXPToAdd} XP за заучивание ${newlyMemorized.length} имён Аллаха: [${newlyMemorized.join(', ')}]`);
+      }
+      
+      // Проверка: если пользователь убрал имена (не должно происходить, но на всякий случай)
+      const removedNames = oldMemorized.filter(id => !newMemorized.includes(id));
+      if (removedNames.length > 0) {
+        console.log(`⚠️ Внимание: убраны имена ${removedNames.join(', ')} - XP не вычитаем`);
+        // НЕ вычитаем XP за убранные имена - защита от случайных потерь
       }
     }
     
