@@ -1518,7 +1518,7 @@ bot.on('message', async (msg) => {
     return;
   }
   
-  if (text === '📊 Статистика') {
+  if (text === '📈 Статистика') {
     // Показываем статистику
     try {
       const user = await getUserById(userId);
@@ -3501,7 +3501,7 @@ bot.onText(/\/admin_notify_no_geo/, async (msg) => {
                 text: '📱 ImanTap ашу',
                 web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${user.userId}` }
               }],
-              ['📊 Статистика', '🎁 Менің промокодым']
+              ['📈 Статистика', '🎁 Менің промокодым']
             ],
             resize_keyboard: true
           }
