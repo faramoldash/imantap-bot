@@ -31,15 +31,15 @@ async function createCircle(ownerId, name, description = '') {
       throw new Error('User not found');
     }
     
-    // Проверяем - не создал ли уже круг
-    const existingCircle = await circles.findOne({
-      ownerId: parseInt(ownerId),
-      'members.status': 'active'
-    });
-    
-    if (existingCircle) {
-      throw new Error('You already have an active circle');
-    }
+    // ✅ ОГРАНИЧЕНИЕ СНЯТО - пользователь может создавать несколько кругов
+    // const existingCircle = await circles.findOne({
+    //   ownerId: parseInt(ownerId),
+    //   'members.status': 'active'
+    // });
+
+    // if (existingCircle) {
+    //   throw new Error('You already have an active circle');
+    // }
     
     const circleId = generateCircleId();
     const inviteCode = generateInviteCode();
