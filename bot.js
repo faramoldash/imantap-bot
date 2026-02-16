@@ -906,7 +906,7 @@ bot.on('callback_query', async (query) => {
             keyboard: [
               [{
                 text: '📱 ImanTap ашу',
-                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
+                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${targetUserId}` }
               }],
               ['⚙️ Баптаулар', '📊 XP'],
               ['📈 Статистика', '🎁 Менің промокодым']
