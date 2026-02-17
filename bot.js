@@ -60,6 +60,7 @@ import {
   removeMember,
   deleteCircle
 } from './services/circleService.js';
+import { getCityByCoordinates, getKazakhstanCities } from './utils/cityMapping.js';
 
 // Экранирование специальных символов для Markdown
 function escapeMarkdown(text) {
@@ -88,39 +89,6 @@ function escapeMarkdown(text) {
 // Форматирование цены с пробелом для тысяч (2490 → 2 490)
 function formatPrice(price) {
   return price.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-}
-
-
-// ✅ Функция определения города по координатам с User-Agent
-async function getCityFromCoordinates(latitude, longitude) {
-  try {
-    const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&accept-language=en`;
-    
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'ImanTap/1.0 (Telegram Bot; https://t.me/imantap_bot)'
-      }
-    });
-    
-    if (!response.ok) {
-      throw new Error('Nominatim API error');
-    }
-    
-    const data = await response.json();
-    
-    const city = data.address?.city || 
-                 data.address?.town || 
-                 data.address?.village || 
-                 data.address?.state || 
-                 'Unknown';
-    const country = data.address?.country || 'Unknown';
-    
-    return { city, country };
-  } catch (error) {
-    console.error('❌ Ошибка Nominatim:', error.message);
-    // Возвращаем заглушку если API недоступен
-    return { city: 'Unknown', country: 'Unknown' };
-  }
 }
 
 // ✅ Простая защита от DDOS
@@ -1409,31 +1377,16 @@ bot.on('location', async (msg) => {
       const timezone = geoTz.find(latitude, longitude)[0];
       
       // ✅ Определяем город и страну по координатам (Reverse Geocoding)
-      await bot.sendMessage(chatId, '⏳ Анықталуда...', { parse_mode: 'Markdown' });
-      
-      const { city, country } = await getCityFromCoordinates(latitude, longitude);
-      
-      console.log(`🌍 User ${userId}: (${latitude}, ${longitude}) → ${city}, ${country} | ${timezone}`);
-      
-      // ✅ Нормализуем название страны перед сохранением
-      const countryNormalization = {
-        'Қазақстан': 'Kazakhstan',
-        'Ресей': 'Russia',
-        'Россия': 'Russia',
-        'Түркия': 'Turkey',
-        'Турция': 'Turkey',
-        'Өзбекстан': 'Uzbekistan',
-        'Узбекистан': 'Uzbekistan',
-        'Қырғызстан': 'Kyrgyzstan',
-        'Кыргызстан': 'Kyrgyzstan'
-      };
+      await bot.sendMessage(chatId, '📍 Орныңыз анықталуда...', { parse_mode: 'Markdown' });
 
-      const normalizedCountry = countryNormalization[country] || country;
+      const city = await getCityByCoordinates(latitude, longitude);
+      
+      console.log(`✅ User ${userId}: [${latitude}, ${longitude}] → ${city} (${timezone})`);
 
       await updateUserOnboarding(userId, {
         location: { 
-          city, 
-          country: normalizedCountry,
+          city: city,
+          country: 'Kazakhstan',
           latitude, 
           longitude, 
           timezone 
@@ -1447,8 +1400,8 @@ bot.on('location', async (msg) => {
       if (state === 'CHANGING_CITY') {
         const user = await getUserById(userId);
         await bot.sendMessage(chatId,
-          `✅ Қала өзгертілді: *${city}, ${country}*\n\n` +
-          `🌍 Уақыт белдеуі: ${timezone}\n` +
+          `✅ Орныңыз сақталды: *${city}*\n\n` +
+          `⏰ Намаз уақыттары:\n` +
           `🌅 Таң намазы: ${user.prayerTimes?.fajr || 'анықталмады'}\n` +
           `🌆 Ақшам намазы: ${user.prayerTimes?.maghrib || 'анықталмады'}`,
           {
@@ -3769,44 +3722,39 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // API: Получить список стран
-    if (url.pathname === '/api/countries') {
+    // API: countries - только Казахстан
+    if (url.pathname === '/api/leaderboard/countries') {
       try {
-        const countries = await getCountries();
         res.statusCode = 200;
-        res.end(JSON.stringify({ 
-          success: true, 
-          data: countries 
-        }));
+        res.end(JSON.stringify({ success: true, data: ['Kazakhstan'] }));
         return;
       } catch (error) {
-        console.error('❌ API Error /countries:', error);
+        console.error('API Error (countries):', error);
         res.statusCode = 500;
         res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
         return;
       }
     }
 
-    // API: Получить список городов в стране
-    if (url.pathname.startsWith('/api/cities/')) {
+    // API: cities - список областных центров Казахстана
+    if (url.pathname === '/api/leaderboard/cities') {
       try {
-        const country = decodeURIComponent(url.pathname.split('/')[3]);
+        const country = url.searchParams.get('country');
         
-        if (!country) {
-          res.statusCode = 400;
-          res.end(JSON.stringify({ success: false, error: 'Country required' }));
+        // Для Казахстана возвращаем фиксированный список областных центров
+        if (country === 'Kazakhstan' || !country) {
+          res.statusCode = 200;
+          res.end(JSON.stringify({ success: true, data: getKazakhstanCities() }));
           return;
         }
         
+        // Для других стран (на будущее)
         const cities = await getCities(country);
         res.statusCode = 200;
-        res.end(JSON.stringify({ 
-          success: true, 
-          data: cities 
-        }));
+        res.end(JSON.stringify({ success: true, data: cities }));
         return;
       } catch (error) {
-        console.error('❌ API Error /cities:', error);
+        console.error('API Error (cities):', error);
         res.statusCode = 500;
         res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
         return;
