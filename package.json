@@ -10,8 +10,7 @@
   },
   "scripts": {
     "start": "node bot.js",
-    "dev": "node --watch bot.js",
-    "migrate-cities": "node scripts/migrateCities.js"
+    "dev": "node --watch bot.js"
   },
   "keywords": [
     "telegram",
