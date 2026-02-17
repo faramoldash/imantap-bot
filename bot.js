@@ -1787,7 +1787,7 @@ bot.on('message', async (msg) => {
                   text: '📱 Рамазан трекерін ашу',
                   web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
                 }],
-                [{ text: '💳 Сатып алу' }]
+                [{ text: '💳 Толық нұсқаны сатып алу' }]
               ],
               resize_keyboard: true
             }
