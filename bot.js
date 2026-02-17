@@ -3741,17 +3741,19 @@ const server = http.createServer(async (req, res) => {
       try {
         const country = url.searchParams.get('country');
         
-        // Для Казахстана возвращаем список с подсчётом пользователей
         if (country === 'Kazakhstan' || !country) {
           const db = getDB();
           const users = db.collection('users');
           
-          // Получаем все города Казахстана с количеством пользователей
+          // ✅ Получаем список только областных центров
+          const regionalCenters = getKazakhstanCities();
+          
+          // ✅ Считаем пользователей только для этих городов
           const cityCounts = await users.aggregate([
             { 
               $match: { 
                 'location.country': 'Kazakhstan',
-                'location.city': { $exists: true, $ne: null }
+                'location.city': { $in: regionalCenters } // ← только из списка!
               } 
             },
             {
@@ -3761,15 +3763,23 @@ const server = http.createServer(async (req, res) => {
               }
             },
             {
-              $sort: { count: -1 } // Сортируем по количеству (убывание)
+              $sort: { count: -1 } // Сортируем по количеству
             }
           ]).toArray();
           
-          // Преобразуем в нужный формат
-          const citiesWithCount = cityCounts.map(item => ({
-            city: item._id,
-            count: item.count
+          // ✅ Создаём Map для быстрого поиска
+          const cityCountMap = new Map(
+            cityCounts.map(item => [item._id, item.count])
+          );
+          
+          // ✅ Формируем полный список (даже если пользователей 0)
+          const citiesWithCount = regionalCenters.map(city => ({
+            city: city,
+            count: cityCountMap.get(city) || 0
           }));
+          
+          // ✅ Сортируем по количеству (убывание)
+          citiesWithCount.sort((a, b) => b.count - a.count);
           
           res.statusCode = 200;
           res.end(JSON.stringify({ success: true, data: citiesWithCount }));
