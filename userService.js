@@ -569,28 +569,27 @@ async function updateUserOnboarding(userId, data) {
 async function checkPromoCode(promoCode, userId) {
   const db = getDB();
   const users = db.collection('users');
-  const usedPromoCodes = db.collection('used_promocodes');
-  
-  const owner = await users.findOne({ promoCode: promoCode.toUpperCase() });
-  
+
+  const normalizedCode = promoCode.toUpperCase();
+
+  // Ищем владельца промокода
+  const owner = await users.findOne({ promoCode: normalizedCode });
+
   if (!owner) {
     return { valid: false, reason: 'not_found' };
   }
-  
+
+  // Нельзя использовать свой промокод
   if (owner.userId === userId) {
     return { valid: false, reason: 'own_code' };
   }
-  
-  const alreadyUsed = await usedPromoCodes.findOne({ promoCode: promoCode.toUpperCase() });
-  
-  if (alreadyUsed) {
-    return { valid: false, reason: 'already_used' };
-  }
-  
+
+  // Владелец промокода должен быть платящим пользователем
   if (owner.paymentStatus !== 'paid') {
     return { valid: false, reason: 'owner_not_paid' };
   }
-  
+
+  // ✅ Больше НЕ проверяем used_promocodes — промокод может использовать много людей
   return { valid: true, owner };
 }
 

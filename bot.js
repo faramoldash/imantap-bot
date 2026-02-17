@@ -1910,8 +1910,6 @@ bot.on('message', async (msg) => {
         hasDiscount: true
       });
       
-      await markPromoCodeAsUsed(promoCode, userId);
-      
       await bot.sendMessage(
         chatId,
         `✅ Промокод қабылданды!
@@ -1927,8 +1925,6 @@ bot.on('message', async (msg) => {
       let errorMsg = '❌ Промокод қате.';
       if (check.reason === 'not_found') {
         errorMsg = '❌ Промокод табылмады.';
-      } else if (check.reason === 'already_used') {
-        errorMsg = '❌ Бұл промокод қолданылған.';
       } else if (check.reason === 'own_code') {
         errorMsg = '❌ Өз промокодыңызды қолдануға болмайды.';
       } else if (check.reason === 'owner_not_paid') {
@@ -1979,8 +1975,6 @@ bot.on('message', async (msg) => {
         hasDiscount: true
       });
       
-      await markPromoCodeAsUsed(promoCode, userId);
-      
       await bot.sendMessage(
         chatId,
         `✅ Промокод қабылданды!
@@ -1995,8 +1989,6 @@ bot.on('message', async (msg) => {
       let errorMsg = '❌ Промокод қате.';
       if (check.reason === 'not_found') {
         errorMsg = '❌ Промокод табылмады.';
-      } else if (check.reason === 'already_used') {
-        errorMsg = '❌ Бұл промокод қолданылған.';
       } else if (check.reason === 'own_code') {
         errorMsg = '❌ Өз промокодыңызды қолдануға болмайды.';
       } else if (check.reason === 'owner_not_paid') {
@@ -2096,8 +2088,6 @@ bot.on('message', async (msg) => {
         paidAmount: newPrice
       });
       
-      await markPromoCodeAsUsed(promoCode, userId);
-      
       // Начисляем XP обоим
       await addUserXP(userId, 100, 'Использован промокод');
       await addUserXP(check.owner.userId, 100, `Промокод использован пользователем ${userId}`);
@@ -2141,8 +2131,6 @@ bot.on('message', async (msg) => {
       
       if (check.reason === 'not_found') {
         errorMsg += 'Бұл промокод табылмады.';
-      } else if (check.reason === 'already_used') {
-        errorMsg += 'Бұл промокод қолданылған.';
       } else if (check.reason === 'own_code') {
         errorMsg += 'Өз промокодыңызды қолдануға болмайды.';
       } else if (check.reason === 'owner_not_paid') {
