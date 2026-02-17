@@ -3736,15 +3736,43 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // API: cities - список областных центров Казахстана
+    // API: cities - список областных центров с количеством пользователей
     if (url.pathname === '/api/leaderboard/cities') {
       try {
         const country = url.searchParams.get('country');
         
-        // Для Казахстана возвращаем фиксированный список областных центров
+        // Для Казахстана возвращаем список с подсчётом пользователей
         if (country === 'Kazakhstan' || !country) {
+          const db = getDB();
+          const users = db.collection('users');
+          
+          // Получаем все города Казахстана с количеством пользователей
+          const cityCounts = await users.aggregate([
+            { 
+              $match: { 
+                'location.country': 'Kazakhstan',
+                'location.city': { $exists: true, $ne: null }
+              } 
+            },
+            {
+              $group: {
+                _id: '$location.city',
+                count: { $sum: 1 }
+              }
+            },
+            {
+              $sort: { count: -1 } // Сортируем по количеству (убывание)
+            }
+          ]).toArray();
+          
+          // Преобразуем в нужный формат
+          const citiesWithCount = cityCounts.map(item => ({
+            city: item._id,
+            count: item.count
+          }));
+          
           res.statusCode = 200;
-          res.end(JSON.stringify({ success: true, data: getKazakhstanCities() }));
+          res.end(JSON.stringify({ success: true, data: citiesWithCount }));
           return;
         }
         
