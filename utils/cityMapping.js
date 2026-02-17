@@ -275,7 +275,7 @@ function getRegionalCenter(cityName, lat, lon) {
   return 'Астана';
 }
 
-module.exports = {
+export {
   getCityByCoordinates,
   getRegionalCenter,
   getRegionalCenterByCoords,
