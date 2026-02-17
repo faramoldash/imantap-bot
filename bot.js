@@ -17,7 +17,6 @@ import {
   // Новые функции
   updateUserOnboarding,
   checkPromoCode,
-  markPromoCodeAsUsed,
   updatePaymentStatus,
   approvePayment,
   rejectPayment,

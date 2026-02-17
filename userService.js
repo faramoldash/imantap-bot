@@ -593,19 +593,6 @@ async function checkPromoCode(promoCode, userId) {
   return { valid: true, owner };
 }
 
-async function markPromoCodeAsUsed(promoCode, userId) {
-  const db = getDB();
-  const usedPromoCodes = db.collection('used_promocodes');
-  
-  await usedPromoCodes.insertOne({
-    promoCode: promoCode.toUpperCase(),
-    usedBy: userId,
-    usedAt: new Date()
-  });
-  
-  console.log(`✅ Промокод ${promoCode} использован пользователем ${userId}`);
-}
-
 async function updatePaymentStatus(userId, status, additionalData = {}) {
   const db = getDB();
   const users = db.collection('users');
@@ -1251,7 +1238,6 @@ export {
   getUserFullData,
   updateUserOnboarding,
   checkPromoCode,
-  markPromoCodeAsUsed,
   updatePaymentStatus,
   approvePayment,
   rejectPayment,
