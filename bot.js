@@ -3799,57 +3799,6 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // 🔧 ВРЕМЕННЫЙ ENDPOINT ДЛЯ МИГРАЦИИ (удалить после использования!)
-    if (url.pathname === '/api/admin/migrate-cities') {
-      try {
-        const db = getDB();
-        const users = db.collection('users');
-        
-        const usersToMigrate = await users.find({ 
-          'location.city': { $exists: true },
-          'location.latitude': { $exists: true }
-        }).toArray();
-        
-        console.log(`📊 Найдено пользователей: ${usersToMigrate.length}`);
-        
-        let updated = 0;
-        const results = [];
-        
-        for (const user of usersToMigrate) {
-          const oldCity = user.location.city;
-          const newCity = await getCityByCoordinates(
-            user.location.latitude,
-            user.location.longitude
-          );
-          
-          if (oldCity !== newCity) {
-            await users.updateOne(
-              { userId: user.userId },
-              { $set: { 'location.city': newCity } }
-            );
-            updated++;
-            results.push(`${oldCity} → ${newCity} (userId: ${user.userId})`);
-            console.log(`✅ ${oldCity} → ${newCity}`);
-          }
-        }
-        
-        res.statusCode = 200;
-        res.end(JSON.stringify({ 
-          success: true, 
-          message: `Миграция завершена! Обновлено: ${updated} из ${usersToMigrate.length}`,
-          updated: updated,
-          total: usersToMigrate.length,
-          sample: results.slice(0, 10) // первые 10 для примера
-        }));
-        return;
-      } catch (error) {
-        console.error('❌ Ошибка миграции:', error);
-        res.statusCode = 500;
-        res.end(JSON.stringify({ success: false, error: error.message }));
-        return;
-      }
-    }
-
     // API: Лидерборд с фильтрами (обновлённый /api/leaderboard/global)
     if (url.pathname === '/api/leaderboard/global') {
       try {
