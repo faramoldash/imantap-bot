@@ -222,6 +222,10 @@ async function updateUserProgress(userId, progressData) {
     
     // ✅ НАЧИСЛЯЕМ XP - сравниваем старое и новое
     let xpToAdd = 0;
+
+    // ✅ Загружаем уже зачтённые задачи из БД
+    const earnedTasksFromDB = oldUser.earnedTasks || {};
+    const todayEarned = [...(earnedTasksFromDB[todayDateStr] || [])];
     
     // Проверяем Рамадан прогресс
     if (progressData.progress) {
@@ -241,13 +245,8 @@ async function updateUserProgress(userId, progressData) {
         const isToday = dayDateStr === todayDateStr;
         
         if (isToday) {
-          const earnedTasks = oldUser.earnedTasks || {};
-          const todayEarned = [...(earnedTasks[todayDateStr] || [])];
-
           for (const taskKey in newDayData) {
             const newValue = newDayData[taskKey];
-
-            // ✅ XP только если задача ещё не зачтена сегодня
             if (newValue === true && !todayEarned.includes(taskKey)) {
               const baseXP = XP_VALUES[taskKey] || 10;
               const currentStreak = oldUser.currentStreak || 0;
@@ -255,13 +254,10 @@ async function updateUserProgress(userId, progressData) {
               const finalXP = Math.floor(baseXP * streakMultiplier);
               xpToAdd += finalXP;
               todayEarned.push(taskKey);
-              console.log(`✅ +${finalXP} XP за ${taskKey} (день ${dayNum}, streak x${streakMultiplier.toFixed(1)})`);
+              console.log(`✅ +${finalXP} XP за ${taskKey} (день ${dayNum})`);
             }
-            // ❌ Снятие галочки — XP НЕ вычитаем (уже зачтено)
+            // ❌ Снятие галочки — XP не вычитаем
           }
-
-          if (!updateFields.earnedTasks) updateFields.earnedTasks = { ...(oldUser.earnedTasks || {}) };
-          updateFields.earnedTasks[todayDateStr] = todayEarned;
         }
       }
     }
@@ -285,12 +281,8 @@ async function updateUserProgress(userId, progressData) {
         const isToday = dayDateStr === todayDateStr;
         
         if (isToday) {
-          const earnedTasks = oldUser.earnedTasks || {};
-          const todayEarned = [...(earnedTasks[todayDateStr] || [])];
-
           for (const taskKey in newDayData) {
             const newValue = newDayData[taskKey];
-
             if (newValue === true && !todayEarned.includes(taskKey)) {
               const baseXP = XP_VALUES[taskKey] || 10;
               const currentStreak = oldUser.currentStreak || 0;
@@ -300,11 +292,7 @@ async function updateUserProgress(userId, progressData) {
               todayEarned.push(taskKey);
               console.log(`✅ +${finalXP} XP за ${taskKey} (подготовка день ${dayNum})`);
             }
-            // ❌ Снятие галочки — XP НЕ вычитаем
           }
-
-          if (!updateFields.earnedTasks) updateFields.earnedTasks = { ...(oldUser.earnedTasks || {}) };
-          updateFields.earnedTasks[todayDateStr] = todayEarned;
         }
       }
     }
@@ -319,12 +307,8 @@ async function updateUserProgress(userId, progressData) {
         const isToday = dateKey === todayDateStr;
         
         if (isToday) {
-          const earnedTasks = oldUser.earnedTasks || {};
-          const todayEarned = [...(earnedTasks[todayDateStr] || [])];
-
           for (const taskKey in newDayData) {
             const newValue = newDayData[taskKey];
-
             if (newValue === true && !todayEarned.includes(taskKey)) {
               const baseXP = XP_VALUES[taskKey] || 10;
               const currentStreak = oldUser.currentStreak || 0;
@@ -334,11 +318,7 @@ async function updateUserProgress(userId, progressData) {
               todayEarned.push(taskKey);
               console.log(`✅ +${finalXP} XP за ${taskKey} (базовый ${dateKey})`);
             }
-            // ❌ Снятие галочки — XP НЕ вычитаем
           }
-
-          if (!updateFields.earnedTasks) updateFields.earnedTasks = { ...(oldUser.earnedTasks || {}) };
-          updateFields.earnedTasks[todayDateStr] = todayEarned;
         }
       }
     }
@@ -397,6 +377,11 @@ async function updateUserProgress(userId, progressData) {
     const updateFields = {
       updatedAt: new Date()
     };
+
+    // ✅ Сохраняем зачтённые задачи (ЗДЕСЬ, после объявления updateFields!)
+    const newEarnedTasks = { ...earnedTasksFromDB };
+    newEarnedTasks[todayDateStr] = todayEarned;
+    updateFields.earnedTasks = newEarnedTasks;
     
     // ✅ ЗАЩИТА: Не сохраняем пустые объекты/массивы для критических полей
     const shouldUpdate = (value) => {
