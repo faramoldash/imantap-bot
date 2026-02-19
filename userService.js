@@ -325,32 +325,6 @@ async function updateUserProgress(userId, progressData) {
         }
       }
     }
-
-    // ✅ Проверяем заучивание имён Аллаха (99 имён)
-    if (progressData.memorizedNames) {
-      const oldMemorized = oldUser.memorizedNames || [];
-      const newMemorized = progressData.memorizedNames || [];
-      
-      // Находим НОВЫЕ имена (которых не было в старом массиве)
-      const newlyMemorized = newMemorized.filter(id => !oldMemorized.includes(id));
-      
-      if (newlyMemorized.length > 0) {
-        const baseNameXP = 100; // 100 XP за каждое имя
-        const nameXPToAdd = newlyMemorized.length * baseNameXP;
-        
-        // ✅ XP за имена НЕ умножаются на streak - это отдельная активность
-        xpToAdd += nameXPToAdd;
-        
-        console.log(`📿 +${nameXPToAdd} XP за заучивание ${newlyMemorized.length} имён Аллаха: [${newlyMemorized.join(', ')}]`);
-      }
-      
-      // Проверка: если пользователь убрал имена (не должно происходить, но на всякий случай)
-      const removedNames = oldMemorized.filter(id => !newMemorized.includes(id));
-      if (removedNames.length > 0) {
-        console.log(`⚠️ Внимание: убраны имена ${removedNames.join(', ')} - XP не вычитаем`);
-        // НЕ вычитаем XP за убранные имена - защита от случайных потерь
-      }
-    }
     
     // ✅ ОБНОВЛЯЕМ STREAK
     const lastActiveDate = oldUser.lastActiveDate || '';
@@ -407,8 +381,22 @@ async function updateUserProgress(userId, progressData) {
     // Массивы и другие поля
     if (progressData.memorizedNames !== undefined) {
       const oldMemorized = oldUser.memorizedNames || [];
-      const merged = [...new Set([...oldMemorized, ...progressData.memorizedNames])];
+      const incoming = progressData.memorizedNames || [];
+
+      // ✅ Merge — массив только растёт
+      const merged = [...new Set([...oldMemorized, ...incoming])];
       updateFields.memorizedNames = merged;
+
+      // ✅ XP только за действительно новые (разница merged vs old)
+      const newlyMemorized = merged.filter(id => !oldMemorized.includes(id));
+      if (newlyMemorized.length > 0) {
+        xpToAdd += newlyMemorized.length * 100;
+        console.log(`📿 +${newlyMemorized.length * 100} XP за ${newlyMemorized.length} новых имён: [${newlyMemorized.join(', ')}]`);
+      }
+
+      if (incoming.length < oldMemorized.length) {
+        console.log(`🛡️ Попытка убрать ${oldMemorized.length - incoming.length} имён — заблокировано`);
+      }
     }
     if (progressData.completedJuzs !== undefined) updateFields.completedJuzs = progressData.completedJuzs;
     if (progressData.quranKhatams !== undefined) updateFields.quranKhatams = progressData.quranKhatams;
