@@ -405,7 +405,11 @@ async function updateUserProgress(userId, progressData) {
     if (shouldUpdate(progressData.basicProgress)) updateFields.basicProgress = progressData.basicProgress;
     
     // Массивы и другие поля
-    if (progressData.memorizedNames !== undefined) updateFields.memorizedNames = progressData.memorizedNames;
+    if (progressData.memorizedNames !== undefined) {
+      const oldMemorized = oldUser.memorizedNames || [];
+      const merged = [...new Set([...oldMemorized, ...progressData.memorizedNames])];
+      updateFields.memorizedNames = merged;
+    }
     if (progressData.completedJuzs !== undefined) updateFields.completedJuzs = progressData.completedJuzs;
     if (progressData.quranKhatams !== undefined) updateFields.quranKhatams = progressData.quranKhatams;
     if (progressData.completedTasks !== undefined) updateFields.completedTasks = progressData.completedTasks;
