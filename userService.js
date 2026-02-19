@@ -241,35 +241,27 @@ async function updateUserProgress(userId, progressData) {
         const isToday = dayDateStr === todayDateStr;
         
         if (isToday) {
-          // Проверяем каждую задачу
+          const earnedTasks = oldUser.earnedTasks || {};
+          const todayEarned = [...(earnedTasks[todayDateStr] || [])];
+
           for (const taskKey in newDayData) {
             const newValue = newDayData[taskKey];
-            const oldValue = oldDayData[taskKey];
-            
-            // ✅ Отметили галочку
-            if (newValue === true && !oldValue) {
+
+            // ✅ XP только если задача ещё не зачтена сегодня
+            if (newValue === true && !todayEarned.includes(taskKey)) {
               const baseXP = XP_VALUES[taskKey] || 10;
-              
-              // ✅ STREAK BONUS
               const currentStreak = oldUser.currentStreak || 0;
               const streakMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
-              
               const finalXP = Math.floor(baseXP * streakMultiplier);
               xpToAdd += finalXP;
-              
+              todayEarned.push(taskKey);
               console.log(`✅ +${finalXP} XP за ${taskKey} (день ${dayNum}, streak x${streakMultiplier.toFixed(1)})`);
             }
-            // ✅ Сняли галочку
-            else if (newValue === false && oldValue === true) {
-              const baseXP = XP_VALUES[taskKey] || 10;
-              const currentStreak = oldUser.currentStreak || 0;
-              const streakMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
-              const finalXP = Math.floor(baseXP * streakMultiplier);
-              xpToAdd -= finalXP;
-              
-              console.log(`❌ -${finalXP} XP за ${taskKey} (день ${dayNum}, снята галочка)`);
-            }
+            // ❌ Снятие галочки — XP НЕ вычитаем (уже зачтено)
           }
+
+          if (!updateFields.earnedTasks) updateFields.earnedTasks = { ...(oldUser.earnedTasks || {}) };
+          updateFields.earnedTasks[todayDateStr] = todayEarned;
         }
       }
     }
@@ -293,31 +285,26 @@ async function updateUserProgress(userId, progressData) {
         const isToday = dayDateStr === todayDateStr;
         
         if (isToday) {
+          const earnedTasks = oldUser.earnedTasks || {};
+          const todayEarned = [...(earnedTasks[todayDateStr] || [])];
+
           for (const taskKey in newDayData) {
             const newValue = newDayData[taskKey];
-            const oldValue = oldDayData[taskKey];
-            
-            // ✅ Отметили галочку (было false/undefined, стало true)
-            if (newValue === true && !oldValue) {
+
+            if (newValue === true && !todayEarned.includes(taskKey)) {
               const baseXP = XP_VALUES[taskKey] || 10;
               const currentStreak = oldUser.currentStreak || 0;
               const streakMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
               const finalXP = Math.floor(baseXP * streakMultiplier);
               xpToAdd += finalXP;
-              
+              todayEarned.push(taskKey);
               console.log(`✅ +${finalXP} XP за ${taskKey} (подготовка день ${dayNum})`);
             }
-            // ✅ Сняли галочку (было true, стало false)
-            else if (newValue === false && oldValue === true) {
-              const baseXP = XP_VALUES[taskKey] || 10;
-              const currentStreak = oldUser.currentStreak || 0;
-              const streakMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
-              const finalXP = Math.floor(baseXP * streakMultiplier);
-              xpToAdd -= finalXP;
-              
-              console.log(`❌ -${finalXP} XP за ${taskKey} (подготовка день ${dayNum}, снята галочка)`);
-            }
+            // ❌ Снятие галочки — XP НЕ вычитаем
           }
+
+          if (!updateFields.earnedTasks) updateFields.earnedTasks = { ...(oldUser.earnedTasks || {}) };
+          updateFields.earnedTasks[todayDateStr] = todayEarned;
         }
       }
     }
@@ -332,31 +319,26 @@ async function updateUserProgress(userId, progressData) {
         const isToday = dateKey === todayDateStr;
         
         if (isToday) {
+          const earnedTasks = oldUser.earnedTasks || {};
+          const todayEarned = [...(earnedTasks[todayDateStr] || [])];
+
           for (const taskKey in newDayData) {
             const newValue = newDayData[taskKey];
-            const oldValue = oldDayData[taskKey];
-            
-            // ✅ Отметили галочку
-            if (newValue === true && !oldValue) {
+
+            if (newValue === true && !todayEarned.includes(taskKey)) {
               const baseXP = XP_VALUES[taskKey] || 10;
               const currentStreak = oldUser.currentStreak || 0;
               const streakMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
               const finalXP = Math.floor(baseXP * streakMultiplier);
               xpToAdd += finalXP;
-              
-              console.log(`✅ +${finalXP} XP за ${taskKey} (базовый день ${dateKey})`);
+              todayEarned.push(taskKey);
+              console.log(`✅ +${finalXP} XP за ${taskKey} (базовый ${dateKey})`);
             }
-            // ✅ Сняли галочку
-            else if (newValue === false && oldValue === true) {
-              const baseXP = XP_VALUES[taskKey] || 10;
-              const currentStreak = oldUser.currentStreak || 0;
-              const streakMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
-              const finalXP = Math.floor(baseXP * streakMultiplier);
-              xpToAdd -= finalXP;
-              
-              console.log(`❌ -${finalXP} XP за ${taskKey} (базовый день ${dateKey}, снята галочка)`);
-            }
+            // ❌ Снятие галочки — XP НЕ вычитаем
           }
+
+          if (!updateFields.earnedTasks) updateFields.earnedTasks = { ...(oldUser.earnedTasks || {}) };
+          updateFields.earnedTasks[todayDateStr] = todayEarned;
         }
       }
     }
