@@ -247,7 +247,8 @@ async function updateUserProgress(userId, progressData) {
         if (isToday) {
           for (const taskKey in newDayData) {
             const newValue = newDayData[taskKey];
-            if (newValue === true && !todayEarned.includes(taskKey)) {
+            const oldValue = oldDayData[taskKey];
+            if (newValue === true && !oldValue && !todayEarned.includes(taskKey)) {
               const baseXP = XP_VALUES[taskKey] || 10;
               const currentStreak = oldUser.currentStreak || 0;
               const streakMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
@@ -283,7 +284,8 @@ async function updateUserProgress(userId, progressData) {
         if (isToday) {
           for (const taskKey in newDayData) {
             const newValue = newDayData[taskKey];
-            if (newValue === true && !todayEarned.includes(taskKey)) {
+            const oldValue = oldDayData[taskKey];
+            if (newValue === true && !oldValue && !todayEarned.includes(taskKey)) {
               const baseXP = XP_VALUES[taskKey] || 10;
               const currentStreak = oldUser.currentStreak || 0;
               const streakMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
@@ -309,7 +311,8 @@ async function updateUserProgress(userId, progressData) {
         if (isToday) {
           for (const taskKey in newDayData) {
             const newValue = newDayData[taskKey];
-            if (newValue === true && !todayEarned.includes(taskKey)) {
+            const oldValue = oldDayData[taskKey];
+            if (newValue === true && !oldValue && !todayEarned.includes(taskKey)) {
               const baseXP = XP_VALUES[taskKey] || 10;
               const currentStreak = oldUser.currentStreak || 0;
               const streakMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
