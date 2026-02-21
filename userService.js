@@ -242,11 +242,9 @@ async function updateUserProgress(userId, progressData) {
         const newDayData = progressData.progress[day];
         const oldDayData = oldProgress[day] || {};
         
-        // ✅ Вычисляем дату этого дня Рамадана
-        const ramadanStartDate = new Date('2026-02-19T00:00:00');
-        const dayDate = new Date(ramadanStartDate);
-        dayDate.setUTCDate(ramadanStartDate.getUTCDate() + (dayNum - 1));
-        const dayDateStr = dayDate.toISOString().split('T')[0];
+        // ✅ Вычисляем дату этого дня Рамадана по timezone пользователя
+        const ramadanDay = new Date(2026, 1, 19 + (dayNum - 1)); // Feb 19 = месяц 1
+        const dayDateStr = ramadanDay.toLocaleDateString('en-CA', { timeZone: userTimezone });
         
         // ✅ XP только если это СЕГОДНЯ
         const isToday = dayDateStr === todayDateStr;
@@ -281,10 +279,8 @@ async function updateUserProgress(userId, progressData) {
         
         // ✅ ИСПРАВЛЕНО: Вычисляем дату дня подготовки
         // День 1 = 9 февраля 2026, День 2 = 10 февраля, и т.д.
-        const prepStartDate = new Date('2026-02-09T00:00:00');
-        const currentDayDate = new Date(prepStartDate);
-        currentDayDate.setUTCDate(prepStartDate.getUTCDate() + (dayNum - 1));
-        const dayDateStr = currentDayDate.toISOString().split('T')[0];
+        const prepDay = new Date(2026, 1, 9 + (dayNum - 1)); // Feb 9 = месяц 1
+        const dayDateStr = prepDay.toLocaleDateString('en-CA', { timeZone: userTimezone });
         
         const isToday = dayDateStr === todayDateStr;
         
