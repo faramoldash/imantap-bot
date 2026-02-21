@@ -35,8 +35,15 @@ const XP_VALUES = {
 /**
  * Генерация уникального промокода
  */
-function generatePromoCode() {
-  return Math.random().toString(36).substring(2, 8).toUpperCase();
+async function generateUniquePromoCode(usersCollection) {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const exists = await usersCollection.findOne({ promoCode: code });
+    if (!exists) return code;
+    console.log(`⚠️ Промокод ${code} уже существует, генерируем новый...`);
+  }
+  // Fallback — timestamp гарантирует уникальность
+  return Date.now().toString(36).toUpperCase().slice(-6);
 }
 
 /**
@@ -49,7 +56,7 @@ async function getOrCreateUser(userId, username = null) {
   let user = await users.findOne({ userId });
 
   if (!user) {
-    const promoCode = generatePromoCode();
+    const promoCode = await generateUniquePromoCode(users);
     
     const newUser = {
       userId,
@@ -206,19 +213,19 @@ async function updateUserProgress(userId, progressData) {
   try {
     const db = getDB();
     const usersCollection = db.collection('users');
-    
-    // ✅ Текущая дата в Almaty timezone
-    const almatyOffset = 5 * 60;
-    const now = new Date();
-    const almatyTime = new Date(now.getTime() + (almatyOffset + now.getTimezoneOffset()) * 60000);
-    const todayDateStr = almatyTime.toISOString().split('T')[0];
-    
-    // ✅ Получаем СТАРЫЕ данные из БД
+
+    // ✅ СНАЧАЛА получаем пользователя из БД
     const oldUser = await usersCollection.findOne({ userId: parseInt(userId) });
     if (!oldUser) {
       console.error('❌ Пользователь не найден:', userId);
       return false;
     }
+    
+    // ✅ Текущая дата в Almaty timezone
+    const now = new Date();
+    const userTimezone = oldUser.location?.timezone || 'Asia/Almaty';
+    const todayDateStr = now.toLocaleDateString('en-CA', { timeZone: userTimezone });
+    // en-CA даёт формат "2026-02-21" — идеально для сравнения дат
     
     // ✅ НАЧИСЛЯЕМ XP - сравниваем старое и новое
     let xpToAdd = 0;
@@ -328,9 +335,9 @@ async function updateUserProgress(userId, progressData) {
     
     // ✅ ОБНОВЛЯЕМ STREAK
     const lastActiveDate = oldUser.lastActiveDate || '';
-    const yesterday = new Date(almatyTime);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayStr = yesterday.toISOString().split('T')[0];
+    // ✅ Вычитаем 1 день и форматируем в timezone пользователя
+    const yesterdayDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const yesterdayStr = yesterdayDate.toLocaleDateString('en-CA', { timeZone: userTimezone });
     
     let newStreak = oldUser.currentStreak || 0;
     
@@ -448,9 +455,6 @@ async function updateUserProgress(userId, progressData) {
       streakMultiplier: 1.0,
       currentStreak: oldUser.currentStreak || 0
     };
-    
-    console.log('⚠️ Прогресс не изменился для userId:', userId);
-    return false;
   } catch (error) {
     console.error('❌ updateUserProgress ошибка:', error);
     throw error;
@@ -1110,14 +1114,13 @@ async function addReferralXP(userId, type = 'registration', referredUserId = nul
     const users = db.collection('users');
     
     // ✅ Текущая дата в Almaty timezone
-    const almatyOffset = 5 * 60;
     const now = new Date();
-    const almatyTime = new Date(now.getTime() + (almatyOffset + now.getTimezoneOffset()) * 60000);
-    const todayDateStr = almatyTime.toISOString().split('T')[0];
+    const todayDateStr = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Almaty' });
+    // Для рефералов — Алматы достаточно, рефереры преимущественно в КЗ
     
     // ✅ Проверка: до 20 марта включительно
     const eidDate = new Date('2026-03-20T23:59:59+05:00');
-    if (almatyTime > eidDate) {
+    if (now > eidDate) {
       console.log('❌ Реферальные бонусы закончились после 20 марта');
       return { success: false, reason: 'period_ended' };
     }

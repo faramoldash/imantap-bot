@@ -258,7 +258,7 @@ async function sendPersonalizedRamadanReminder(type) {
     for (const user of activeUsers) {
       try {
         const prayerTimes = user.prayerTimes;
-        const minutesBefore = 30; // За 30 минут до намаза
+        const minutesBefore = 15; // За 15 минут до намаза
         const lang = user.language || 'kk';
         
         // ✅ ИСПРАВЛЕНО: Правильный расчёт локального времени
@@ -280,7 +280,7 @@ async function sendPersonalizedRamadanReminder(type) {
         let shouldSend = false;
         let prayerTime = '';
         
-        // Проверяем сухур (за 30 минут до Fajr)
+        // Проверяем сухур (за 15 минут до Fajr)
         if (type === 'suhur' && prayerTimes.fajr) {
           const reminderTime = calculateReminderTime(prayerTimes.fajr, minutesBefore);
           
@@ -290,7 +290,7 @@ async function sendPersonalizedRamadanReminder(type) {
           }
         }
         
-        // Проверяем ифтар (за 30 минут до Maghrib)
+        // Проверяем ифтар (за 15 минут до Maghrib)
         if (type === 'iftar' && prayerTimes.maghrib) {
           const reminderTime = calculateReminderTime(prayerTimes.maghrib, minutesBefore);
           
@@ -303,22 +303,35 @@ async function sendPersonalizedRamadanReminder(type) {
         if (shouldSend) {
           const message = RAMADAN_MESSAGES[type][lang].replace('{PRAYER_TIME}', prayerTime);
           
-          await bot.sendMessage(user.userId, message, {
-            parse_mode: 'Markdown',
-            reply_markup: {
-              inline_keyboard: [[
-                { 
-                  text: lang === 'kk' ? '✅ Жасалды' : '✅ Готово', 
-                  callback_data: `ramadan_${type}_done` 
-                }
-              ]]
+          try {
+            await bot.sendMessage(user.userId, message, {
+              parse_mode: 'Markdown',
+              reply_markup: {
+                inline_keyboard: [[
+                  {
+                    text: lang === 'kk' ? '✅ Жасалды' : '✅ Готово',
+                    callback_data: `ramadan_${type}_done`
+                  }
+                ]]
+              }
+            });
+
+            console.log(`📨 ${type} → User ${user.userId} (${userTimezone}, ${currentHour}:${currentMinute.toString().padStart(2, '0')})`);
+            sentCount++;
+            await new Promise(resolve => setTimeout(resolve, 100));
+
+          } catch (sendError) {
+            if (sendError?.response?.body?.error_code === 403) {
+              // Пользователь заблокировал бота — отключаем
+              await users.updateOne(
+                { userId: user.userId },
+                { $set: { 'notificationSettings.ramadanReminders': false } }
+              );
+              console.log(`🚫 User ${user.userId} заблокировал бота — уведомления отключены`);
+            } else {
+              console.error(`❌ Ошибка отправки ${user.userId}:`, sendError.message);
             }
-          });
-          
-          console.log(`📨 ${type} → User ${user.userId} (${userTimezone}, ${currentHour}:${currentMinute.toString().padStart(2, '0')})`);
-          
-          sentCount++;
-          await new Promise(resolve => setTimeout(resolve, 100));
+          }
         }
       } catch (error) {
         console.error(`❌ Ошибка отправки ${user.userId}:`, error.message);
@@ -336,29 +349,45 @@ async function sendPersonalizedRamadanReminder(type) {
 // ✅ Проверка каждую минуту
 console.log('⏰ Система персонализированных уведомлений запущена');
 
-setInterval(async () => {
+// ✅ Точно каждую минуту, без дрейфа
+schedule.scheduleJob('* * * * *', async () => {
   await sendPersonalizedRamadanReminder('suhur');
   await sendPersonalizedRamadanReminder('iftar');
-}, 60 * 1000);
+});
 
-// ✅ Обновляем времена намазов каждую ночь в 00:00 UTC
-schedule.scheduleJob('0 0 * * *', async () => {
+// ✅ Обновляем времена намазов в 19:30 UTC = 00:30 Алматы (ДО Fajr)
+schedule.scheduleJob('30 19 * * *', async () => {
   console.log('🔄 Обновление времен намазов...');
   
   const db = getDB();
   const users = db.collection('users');
-  const allUsers = await users.find({ 
-    'location.city': { $exists: true }
+
+  // ✅ Берём ВСЕХ у кого есть локация (координаты ИЛИ город)
+  const allUsers = await users.find({
+    $or: [
+      { 'location.latitude': { $exists: true } },
+      { 'location.city': { $exists: true } }
+    ]
   }).toArray();
-  
+
   let updated = 0;
-  for (const user of allUsers) {
-    const success = await updateUserPrayerTimes(user.userId);
-    if (success) updated++;
-    await new Promise(resolve => setTimeout(resolve, 500));
+  const BATCH_SIZE = 10;
+
+  for (let i = 0; i < allUsers.length; i += BATCH_SIZE) {
+    const batch = allUsers.slice(i, i + BATCH_SIZE);
+    const results = await Promise.all(
+      batch.map(user => updateUserPrayerTimes(user.userId))
+    );
+    updated += results.filter(Boolean).length;
+    console.log(`⏳ Обновлено ${Math.min(i + BATCH_SIZE, allUsers.length)}/${allUsers.length}...`);
+
+    // Пауза между батчами — не перегружаем Aladhan API
+    if (i + BATCH_SIZE < allUsers.length) {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+    }
   }
-  
-  console.log(`✅ Обновлено: ${updated}/${allUsers.length} пользователей`);
+
+  console.log(`✅ Намазы обновлены: ${updated}/${allUsers.length} пользователей`);
 });
 
 // 📊 Напоминание отметить прогресс (персонализированное по timezone каждого пользователя)
@@ -384,8 +413,13 @@ schedule.scheduleJob('0 * * * *', async () => {  // Каждый час
         // Получаем локальное время пользователя
         const userTimezone = user.location?.timezone || 'Asia/Almaty';
         const now = new Date();
-        const userLocalTime = new Date(now.toLocaleString('en-US', { timeZone: userTimezone }));
-        const currentHour = userLocalTime.getHours();
+        // ✅ Правильно — извлекаем час из отформатированной строки
+        const userHourStr = now.toLocaleString('en-US', {
+          timeZone: userTimezone,
+          hour12: false,
+          hour: '2-digit'
+        });
+        const currentHour = parseInt(userHourStr, 10);
         
         // Отправляем в 20:00 по местному времени пользователя
         if (currentHour === 20) {
@@ -787,14 +821,6 @@ bot.on('callback_query', async (query) => {
     );
     
     setState(userId, 'ENTERING_PROMO_FROM_PAYWALL');
-    return;
-  }
-
-  // ==========================================
-  // Обработка кнопки "Промокод енгізу" из Paywall
-  // ==========================================
-  if (data === 'enter_promo_code') {
-    // ... существующий код
     return;
   }
 
@@ -1254,75 +1280,94 @@ async function showPayment(chatId, userId, price, hasDiscount) {
 
     // 1️⃣ Реферальная ссылка
     if (user.referredBy && hasDiscount) {
-      messageText = `💳 Imantap Premium-ға қолжетімділік
+      messageText = 
+`💳 <b>Imantap Premium</b>
+━━━━━━━━━━━━━━━━━━━
 
-🎉 Сізді <b>${user.referredBy}</b> сілтемесі бойынша шақырды!
+🎉 <b>${user.referredBy}</b> сілтемесі арқылы шақырылдыңыз!
 
-✅ Сізге -500₸ жеңілдік берілді:
-<s>${formatPrice(2490)}₸</s> → <b>${formatPrice(price)}₸</b> 🎁
+💰 <b>Баға:</b>
+<s>${formatPrice(2490)}₸</s> → <b>${formatPrice(price)}₸</b> <b>(-500₸ жеңілдік 🎁)</b>
 
-📅 <b>Жазылым мерзімі: 90 күн</b>
+📅 <b>Мерзімі:</b> 90 күн
 
-📋 Не қамтылған:
-✓ Рамазанның 30 күніне арналған трекер
-✓ Алланың 99 есімі
-✓ Мақсаттар прогресі
-✓ Құранды пара бойынша оқу кестесі
-✓ Турнир және XP жүйесі
-✓ Топпен жұмыс
+─────────────────────
+<b>📦 Premium мүмкіндіктері:</b>
 
-Kaspi арқылы төлем жасап, чекті осында жіберіңіз.`;
+🌙 Рамазанның 30 күніне трекер
+📿 Алланың 99 есімі
+🎯 Жеке мақсаттар прогресі
+📖 Құранды пара бойынша оқу кестесі
+🏆 Турнир және XP жүйесі
+👥 Топпен бірге жұмыс
+─────────────────────
+
+👇 <b>Kaspi арқылы төлем жасап, чекті осында жіберіңіз</b>`;
+
       inlineKeyboard = [
-        [{ text: '💳 Kaspi арқылы төлем', url: kaspiLink }],
-        [{ text: '📄 Менде чек бар', callback_data: 'havereceipt' }]
+        [{ text: '💳 Kaspi арқылы төлем жасау', url: kaspiLink }],
+        [{ text: '📄 Менде чек бар ✅', callback_data: 'havereceipt' }]
       ];
     }
     // 2️⃣ Промокод
     else if (user.usedPromoCode && hasDiscount) {
-      messageText = `💳 Imantap Premium-ға қолжетімділік
+      messageText = 
+`💳 <b>Imantap Premium</b>
+━━━━━━━━━━━━━━━━━━━
 
 🎁 Промокод қолданылды: <b>${user.usedPromoCode}</b>
 
-✅ Сізге -500₸ жеңілдік берілді:
-<s>${formatPrice(2490)}₸</s> → <b>${formatPrice(price)}₸</b> 🎁
+💰 <b>Баға:</b>
+<s>${formatPrice(2490)}₸</s> → <b>${formatPrice(price)}₸</b> <b>(-500₸ жеңілдік 🎁)</b>
 
-📅 <b>Жазылым мерзімі: 90 күн</b>
+📅 <b>Мерзімі:</b> 90 күн
 
-📋 Не қамтылған:
-✓ Рамазанның 30 күніне арналған трекер
-✓ Алланың 99 есімі
-✓ Мақсаттар прогресі
-✓ Құранды пара бойынша оқу кестесі
-✓ Турнир және XP жүйесі
-✓ Топпен жұмыс
+─────────────────────
+<b>📦 Premium мүмкіндіктері:</b>
 
-Kaspi арқылы төлем жасап, чекті осында жіберіңіз.`;
+🌙 Рамазанның 30 күніне трекер
+📿 Алланың 99 есімі
+🎯 Жеке мақсаттар прогресі
+📖 Құранды пара бойынша оқу кестесі
+🏆 Турнир және XP жүйесі
+👥 Топпен бірге жұмыс
+─────────────────────
+
+👇 <b>Kaspi арқылы төлем жасап, чекті осында жіберіңіз</b>`;
+
       inlineKeyboard = [
-        [{ text: '💳 Kaspi арқылы төлем', url: kaspiLink }],
-        [{ text: '📄 Менде чек бар', callback_data: 'havereceipt' }]
+        [{ text: '💳 Kaspi арқылы төлем жасау', url: kaspiLink }],
+        [{ text: '📄 Менде чек бар ✅', callback_data: 'havereceipt' }]
       ];
     }
     // 3️⃣ Без скидки
     else {
-      messageText = `💳 Imantap Premium-ға қолжетімділік
+      messageText = 
+`💳 <b>Imantap Premium</b>
+━━━━━━━━━━━━━━━━━━━
 
-💰 Бағасы: <b>${formatPrice(price)}₸</b>
+💰 <b>Баға: ${formatPrice(price)}₸</b>
+📅 <b>Мерзімі:</b> 90 күн
 
-📅 <b>Жазылым мерзімі: 90 күн</b>
+─────────────────────
+<b>📦 Premium мүмкіндіктері:</b>
 
-📋 Не қамтылған:
-✓ Рамазанның 30 күніне арналған трекер
-✓ Алланың 99 есімі
-✓ Мақсаттар прогресі
-✓ Құранды пара бойынша оқу кестесі
-✓ Турнир және XP жүйесі
-✓ Топпен жұмыс
+🌙 Рамазанның 30 күніне трекер
+📿 Алланың 99 есімі
+🎯 Жеке мақсаттар прогресі
+📖 Құранды пара бойынша оқу кестесі
+🏆 Турнир және XP жүйесі
+👥 Топпен бірге жұмыс
+─────────────────────
 
-Kaspi арқылы төлем жасап, чекті осында жіберіңіз.`;
+🎁 <i>Промокод бар ма? Төмендегі батырманы басыңыз!</i>
+
+👇 <b>Kaspi арқылы төлем жасап, чекті осында жіберіңіз</b>`;
+
       inlineKeyboard = [
-        [{ text: '💳 Kaspi арқылы төлем', url: kaspiLink }],
-        [{ text: '🎁 Промокод енгізу', callback_data: 'enterpromocode' }],
-        [{ text: '📄 Менде чек бар', callback_data: 'havereceipt' }]
+        [{ text: '💳 Kaspi арқылы төлем жасау', url: kaspiLink }],
+        [{ text: '🎁 Промокод енгізу', callback_data: 'enter_promo_code' }],
+        [{ text: '📄 Менде чек бар ✅', callback_data: 'havereceipt' }]
       ];
     }
 
