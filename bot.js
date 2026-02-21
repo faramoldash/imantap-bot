@@ -397,8 +397,6 @@ schedule.scheduleJob('0 * * * *', async () => {  // Каждый час
     const db = getDB();
     const users = db.collection('users');
     
-    const today = new Date().toISOString().split('T')[0];
-    
     // Пользователи с оплаченным доступом
     const activeUsers = await users.find({
       paymentStatus: { $in: ['paid', 'demo'] },
@@ -424,7 +422,8 @@ schedule.scheduleJob('0 * * * *', async () => {  // Каждый час
         // Отправляем в 20:00 по местному времени пользователя
         if (currentHour === 20) {
           // Проверяем - отмечал ли прогресс сегодня
-          const hasProgressToday = user.lastActiveDate === today;
+          const todayForUser = now.toLocaleDateString('en-CA', { timeZone: userTimezone });
+          const hasProgressToday = user.lastActiveDate === todayForUser;
           
           if (!hasProgressToday) {
             const message = user.language === 'kk'
@@ -462,7 +461,7 @@ schedule.scheduleJob('0 * * * *', async () => {  // Каждый час
 });
 
 console.log('✅ Напоминание о прогрессе настроено (20:00)\n');
-console.log('✅ Автообновление времен настроено (00:00)\n');
+console.log('✅ Автообновление времен настроено (00:30 Алматы / 19:30 UTC)');
 
 // 🔔 Проверка истекающих подписок (каждый день в 10:00 UTC)
 schedule.scheduleJob('0 10 * * *', async () => {
@@ -1417,30 +1416,55 @@ bot.on('location', async (msg) => {
     const { latitude, longitude } = msg.location;
     
     try {
-      // ✅ Определяем часовой пояс по координатам
-      const timezone = geoTz.find(latitude, longitude)[0];
-      
-      // ✅ Определяем город и страну по координатам (Reverse Geocoding)
+      // ✅ 1. Сначала timezone (мгновенно, без API)
+      const tzResult = geoTz.find(latitude, longitude);
+      const timezone = tzResult.length > 0 ? tzResult[0] : 'Asia/Almaty';
+
+      // ✅ 2. Страна по timezone
+      const country = 
+        timezone.startsWith('Asia/Almaty') || 
+        timezone.startsWith('Asia/Aqtau') || 
+        timezone.startsWith('Asia/Aqtobe') || 
+        timezone.startsWith('Asia/Atyrau') || 
+        timezone.startsWith('Asia/Oral') || 
+        timezone.startsWith('Asia/Qostanay') || 
+        timezone.startsWith('Asia/Qyzylorda')
+          ? 'Kazakhstan'
+        : timezone.startsWith('Asia/Tashkent') || timezone.startsWith('Asia/Samarkand')
+          ? 'Uzbekistan'
+        : timezone.startsWith('Asia/Bishkek')
+          ? 'Kyrgyzstan'
+        : timezone.startsWith('Europe/Moscow') || timezone.startsWith('Asia/Yekaterinburg') || timezone.startsWith('Asia/Novosibirsk')
+          ? 'Russia'
+        : timezone.startsWith('Europe/Istanbul') || timezone.startsWith('Asia/Istanbul')
+          ? 'Turkey'
+        : timezone.startsWith('Asia/Dubai')
+          ? 'UAE'
+        : 'Other';
+
+      // ✅ 3. Сообщение пока идёт reverse geocoding
       await bot.sendMessage(chatId, '📍 Орныңыз анықталуда...', { parse_mode: 'Markdown' });
 
+      // ✅ 4. Получаем город (API вызов)
       const city = await getCityByCoordinates(latitude, longitude);
       
-      console.log(`✅ User ${userId}: [${latitude}, ${longitude}] → ${city} (${timezone})`);
+      console.log(`✅ User ${userId}: [${latitude}, ${longitude}] → ${city}, ${country} (${timezone})`);
 
+      // ✅ 5. ОДИН вызов updateUserOnboarding — с city, country, timezone
       await updateUserOnboarding(userId, {
         location: { 
-          city: city,
-          country: 'Kazakhstan',
+          city,
+          country,
           latitude, 
           longitude, 
           timezone 
         }
       });
       
-      // ✅ Обновляем времена намазов
+      // ✅ 6. Обновляем времена намазов
       await updateUserPrayerTimes(userId);
       
-      // ✅ Если это смена города - показываем результат и завершаем
+      // ✅ 7. Если это смена города
       if (state === 'CHANGING_CITY') {
         const user = await getUserById(userId);
         await bot.sendMessage(chatId,
@@ -1452,10 +1476,7 @@ bot.on('location', async (msg) => {
             parse_mode: 'Markdown',
             reply_markup: {
               keyboard: [
-                [{
-                  text: '📱 ImanTap ашу',
-                  web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
-                }],
+                [{ text: '📱 ImanTap ашу', web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` } }],
                 ['⚙️ Баптаулар', '📊 XP'],
                 ['📈 Статистика', '🎁 Менің промокодым']
               ],
@@ -1464,10 +1485,10 @@ bot.on('location', async (msg) => {
           }
         );
         clearSession(userId);
-        return;  // ✅ Завершаем, НЕ вызываем requestPromoCode
+        return;
       }
       
-      // ✅ Если это онбординг - продолжаем к промокоду
+      // ✅ 8. Онбординг — продолжаем
       await requestPromoCode(chatId, userId);
       
     } catch (error) {
