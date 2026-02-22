@@ -114,6 +114,7 @@ async function getOrCreateUser(userId, username = null) {
       basicProgress: {},
       memorizedNames: [],
       completedJuzs: [],
+      earnedJuzXpIds: [],
       quranKhatams: 0,
       completedTasks: [],
       deletedPredefinedTasks: [],
@@ -401,8 +402,36 @@ async function updateUserProgress(userId, progressData) {
         console.log(`🛡️ Попытка убрать ${oldMemorized.length - incoming.length} имён — заблокировано`);
       }
     }
+    // ✅ completedJuzs - UI прогресс, принимаем как есть
     if (progressData.completedJuzs !== undefined) updateFields.completedJuzs = progressData.completedJuzs;
-    if (progressData.quranKhatams !== undefined) updateFields.quranKhatams = progressData.quranKhatams;
+
+    // ✅ earnedJuzXpIds - только растёт (merge), XP за новые пары
+    if (progressData.earnedJuzXpIds !== undefined) {
+      const oldEarned = oldUser.earnedJuzXpIds || [];
+      const incoming = progressData.earnedJuzXpIds || [];
+      const merged = [...new Set([...oldEarned, ...incoming])];
+      updateFields.earnedJuzXpIds = merged;
+
+      const newlyEarned = merged.filter(id => !oldEarned.includes(id));
+      if (newlyEarned.length > 0) {
+        xpToAdd += newlyEarned.length * 150;
+        console.log(`📖 +${newlyEarned.length * 150} XP за ${newlyEarned.length} новых пар: [${newlyEarned.join(', ')}]`);
+      }
+      if (incoming.length < oldEarned.length) {
+        console.log(`🛡️ Попытка убрать ${oldEarned.length - incoming.length} пар — заблокировано`);
+      }
+    }
+
+    // ✅ quranKhatams - XP только за ПЕРВЫЙ хатым
+    if (progressData.quranKhatams !== undefined) {
+      const oldKhatams = oldUser.quranKhatams || 0;
+      const newKhatams = progressData.quranKhatams || 0;
+      if (newKhatams > oldKhatams && oldKhatams === 0) {
+        xpToAdd += 1000;
+        console.log(`🕋 +1000 XP за первый хатым!`);
+      }
+      updateFields.quranKhatams = newKhatams;
+    }
     if (progressData.completedTasks !== undefined) updateFields.completedTasks = progressData.completedTasks;
     if (progressData.deletedPredefinedTasks !== undefined) updateFields.deletedPredefinedTasks = progressData.deletedPredefinedTasks;
     if (progressData.customTasks !== undefined) updateFields.customTasks = progressData.customTasks;
@@ -482,6 +511,7 @@ async function getUserFullData(userId) {
       basicProgress: user.basicProgress || {},  // ✅ ДОБАВЬТЕ
       memorizedNames: user.memorizedNames || [],
       completedJuzs: user.completedJuzs || [],
+      earnedJuzXpIds: user.earnedJuzXpIds || [],
       quranKhatams: user.quranKhatams || 0,
       completedTasks: user.completedTasks || [],
       deletedPredefinedTasks: user.deletedPredefinedTasks || [],
