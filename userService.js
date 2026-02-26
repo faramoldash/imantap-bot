@@ -5,44 +5,30 @@ import { getDB } from './db.js';
  * ✅ ТАБЛИЦА НАЧИСЛЕНИЯ XP ЗА ЗАДАЧИ
  */
 const XP_VALUES = {
-  // Намазы
-  fajr: 50,
-  duha: 30,
-  dhuhr: 50,
-  asr: 50,
-  maghrib: 50,
-  isha: 50,
-  taraweeh: 100,
-  tahajjud: 100,
-  witr: 50,
-  eidPrayer: 200,
-  
-  // Духовные практики
-  fasting: 200,
-  quranRead: 100,
-  morningDhikr: 30,
-  eveningDhikr: 30,
-  salawat: 20,
-  hadith: 50,
-  charity: 100,
-  names99: 50,
-  lessons: 50,
-  book: 50,
-  // 99 имён Аллаха (обрабатывается отдельно)
-  singleName: 100 // За каждое заученное имя
+  fajr: 50, duha: 30, dhuhr: 50, asr: 50, maghrib: 50, isha: 50,
+  taraweeh: 100, tahajjud: 100, witr: 50, eidPrayer: 200,
+  fasting: 200, quranRead: 100, morningDhikr: 30, eveningDhikr: 30,
+  salawat: 20, hadith: 50, charity: 100, names99: 50, lessons: 50, book: 50,
+  singleName: 100
 };
 
-/**
- * Генерация уникального промокода
- */
+// ─── ДОПУСТИМЫЕ XP ЗА КАТЕГОРИИ ЦЕЛЕЙ (v2) ───
+// Максимальное XP на категорию в день — защита от шаблонов с завышенным XP
+const GOAL_CATEGORY_MAX_XP = {
+  prayer:    150,
+  quran:     200,
+  dhikr:     100,
+  fasting:   200,
+  charity:   150,
+  selfdev:   100,
+};
+
 async function generateUniquePromoCode(usersCollection) {
   for (let attempt = 0; attempt < 10; attempt++) {
     const code = Math.random().toString(36).substring(2, 8).toUpperCase();
     const exists = await usersCollection.findOne({ promoCode: code });
     if (!exists) return code;
-    console.log(`⚠️ Промокод ${code} уже существует, генерируем новый...`);
   }
-  // Fallback — timestamp гарантирует уникальность
   return Date.now().toString(36).toUpperCase().slice(-6);
 }
 
@@ -52,63 +38,33 @@ async function generateUniquePromoCode(usersCollection) {
 async function getOrCreateUser(userId, username = null) {
   const db = getDB();
   const users = db.collection('users');
-
   let user = await users.findOne({ userId });
 
   if (!user) {
     const promoCode = await generateUniquePromoCode(users);
-    
     const newUser = {
       userId,
       username: username ? `@${username}` : null,
       promoCode,
       invitedCount: 0,
-      
-      // Новые поля онбординга
       name: null,
       phoneNumber: null,
-      location: {
-        city: null,
-        country: null,
-        latitude: null,
-        longitude: null,
-        timezone: null
-      },
-
-      prayerTimes: { // ✅ ДОБАВЬТЕ новое поле
-        fajr: null,
-        sunrise: null,
-        dhuhr: null,
-        asr: null,
-        maghrib: null,
-        isha: null,
-        lastUpdated: null
-      },
-      notificationSettings: { // ✅ ДОБАВЬТЕ настройки уведомлений
-        ramadanReminders: true,
-        reminderMinutesBefore: 30
-      },
-      
-      // Реферальная система
+      location: { city: null, country: null, latitude: null, longitude: null, timezone: null },
+      prayerTimes: { fajr: null, sunrise: null, dhuhr: null, asr: null, maghrib: null, isha: null, lastUpdated: null },
+      notificationSettings: { ramadanReminders: true, reminderMinutesBefore: 30 },
       referredBy: null,
       usedPromoCode: null,
-      
-      // Оплата
       paymentStatus: 'unpaid',
       paidAmount: null,
       hasDiscount: false,
       receiptPhotoId: null,
       receiptMessageId: null,
       paymentDate: null,
-      subscriptionExpiresAt: null, // ✅ НОВОЕ: Дата окончания подписки
-      subscriptionNotified3Days: false, // ✅ НОВОЕ: Флаг уведомления за 3 дня
-      subscriptionNotified1Day: false,  // ✅ НОВОЕ: Флаг уведомления за 1 день
-      
-      // Доступ
+      subscriptionExpiresAt: null,
+      subscriptionNotified3Days: false,
+      subscriptionNotified1Day: false,
       accessType: null,
       demoExpiresAt: null,
-      
-      // Прогресс (как было)
       progress: {},
       preparationProgress: {},
       basicProgress: {},
@@ -126,312 +82,275 @@ async function getOrCreateUser(userId, username = null) {
       xp: 0,
       unlockedBadges: [],
       hasRedeemedReferral: false,
-      
-      // Мета
+      // ✅ НОВЫЕ ПОЛЯ — Мақсаттар v2
+      dailyGoalRecords: {},      // { '2026-03-01': [ DailyGoalRecord, ... ] }
+      goalCustomItems: {},        // { prayer: [ CustomGoalItem, ... ] }
+      goalStreaks: {},             // { prayer: 3, quran: 5, ... }
+      earnedGoalXp: {},           // { '2026-03-01': { prayer: true, quran: true } } — защита
       onboardingCompleted: false,
       createdAt: new Date(),
       updatedAt: new Date()
     };
-
     await users.insertOne(newUser);
     console.log(`✅ Создан новый пользователь: ${userId}`);
-    
     user = newUser;
   }
-
   return user;
 }
 
-/**
- * Получить пользователя по ID
- */
 async function getUserById(userId) {
   try {
     const db = getDB();
-    const usersCollection = db.collection('users');
-    
-    const user = await usersCollection.findOne({ userId: parseInt(userId) });
-    return user;
+    return await db.collection('users').findOne({ userId: parseInt(userId) });
   } catch (error) {
     console.error('❌ Ошибка в getUserById:', error);
     throw error;
   }
 }
 
-/**
- * Получить пользователя по промокоду
- */
 async function getUserByPromoCode(promoCode) {
   try {
     const db = getDB();
-    const usersCollection = db.collection('users');
-    
-    const user = await usersCollection.findOne({ promoCode: promoCode.toUpperCase() });
-    return user;
+    return await db.collection('users').findOne({ promoCode: promoCode.toUpperCase() });
   } catch (error) {
     console.error('❌ Ошибка в getUserByPromoCode:', error);
     throw error;
   }
 }
 
-/**
- * Увеличить счётчик рефералов
- */
 async function incrementReferralCount(promoCode) {
   try {
     const db = getDB();
     const usersCollection = db.collection('users');
-    
-    // Сначала найдём пользователя по промокоду
     const user = await usersCollection.findOne({ promoCode: promoCode.toUpperCase() });
-    
     const result = await usersCollection.updateOne(
       { promoCode: promoCode.toUpperCase() },
-      { 
-        $inc: { invitedCount: 1 },
-        $set: { updatedAt: new Date() }
-      }
+      { $inc: { invitedCount: 1 }, $set: { updatedAt: new Date() } }
     );
-    
     if (result.modifiedCount > 0 && user) {
-      await checkAndUnlockBadges(user.userId); // ← ДОБАВИТЬ ЭТУ СТРОКУ
-      console.log(`✅ Увеличен счётчик рефералов для промокода: ${promoCode}`);
+      await checkAndUnlockBadges(user.userId);
       return true;
     }
-    
-    console.log(`❌ Не найден пользователь с промокодом: ${promoCode}`);
     return false;
   } catch (error) {
-    console.error('❌ Ошибка incrementReferralCount:', error);
+    console.error('❌ incrementReferralCount:', error);
     throw error;
   }
 }
 
 /**
- * Обновить полный прогресс пользователя
+ * Обновить полный прогресс пользователя (sync endpoint)
  */
 async function updateUserProgress(userId, progressData) {
   try {
     const db = getDB();
     const usersCollection = db.collection('users');
 
-    // ✅ СНАЧАЛА получаем пользователя из БД
     const oldUser = await usersCollection.findOne({ userId: parseInt(userId) });
-    if (!oldUser) {
-      console.error('❌ Пользователь не найден:', userId);
-      return false;
-    }
-    
-    // ✅ Текущая дата в Almaty timezone
+    if (!oldUser) { console.error('❌ Пользователь не найден:', userId); return false; }
+
     const now = new Date();
     const userTimezone = oldUser.location?.timezone || 'Asia/Almaty';
     const todayDateStr = now.toLocaleDateString('en-CA', { timeZone: userTimezone });
-    // en-CA даёт формат "2026-02-21" — идеально для сравнения дат
-    
-    // ✅ НАЧИСЛЯЕМ XP - сравниваем старое и новое
-    let xpToAdd = 0;
 
-    // ✅ Загружаем уже зачтённые задачи из БД
+    let xpToAdd = 0;
     const earnedTasksFromDB = oldUser.earnedTasks || {};
     const todayEarned = [...(earnedTasksFromDB[todayDateStr] || [])];
-    
-    // Проверяем Рамадан прогресс
+
+    // ─── XP за Ramadan прогресс ───
     if (progressData.progress) {
       const oldProgress = oldUser.progress || {};
       for (const day in progressData.progress) {
         const dayNum = parseInt(day);
         const newDayData = progressData.progress[day];
         const oldDayData = oldProgress[day] || {};
-        
-        // ✅ Вычисляем дату этого дня Рамадана по timezone пользователя
-        const ramadanDay = new Date(2026, 1, 19 + (dayNum - 1)); // Feb 19 = месяц 1
+        const ramadanDay = new Date(2026, 1, 19 + (dayNum - 1));
         const dayDateStr = ramadanDay.toLocaleDateString('en-CA', { timeZone: userTimezone });
-        
-        // ✅ XP только если это СЕГОДНЯ
-        const isToday = dayDateStr === todayDateStr;
-        
-        if (isToday) {
+        if (dayDateStr === todayDateStr) {
           for (const taskKey in newDayData) {
-            const newValue = newDayData[taskKey];
-            const oldValue = oldDayData[taskKey];
-            if (newValue === true && !oldValue && !todayEarned.includes(taskKey)) {
+            if (newDayData[taskKey] === true && !oldDayData[taskKey] && !todayEarned.includes(taskKey)) {
               const baseXP = XP_VALUES[taskKey] || 10;
-              const currentStreak = oldUser.currentStreak || 0;
-              const streakMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
-              const finalXP = Math.floor(baseXP * streakMultiplier);
-              xpToAdd += finalXP;
+              const streakMultiplier = Math.min(1 + ((oldUser.currentStreak || 0) * 0.1), 3.0);
+              xpToAdd += Math.floor(baseXP * streakMultiplier);
               todayEarned.push(taskKey);
-              console.log(`✅ +${finalXP} XP за ${taskKey} (день ${dayNum})`);
+              console.log(`✅ +${Math.floor(baseXP * streakMultiplier)} XP за ${taskKey}`);
             }
-            // ❌ Снятие галочки — XP не вычитаем
           }
         }
       }
     }
-    
-    // Проверяем Preparation прогресс
+
+    // ─── XP за Preparation прогресс ───
     if (progressData.preparationProgress) {
-      
       const oldPrep = oldUser.preparationProgress || {};
       for (const day in progressData.preparationProgress) {
         const dayNum = parseInt(day);
         const newDayData = progressData.preparationProgress[day];
         const oldDayData = oldPrep[day] || {};
-        
-        // ✅ ИСПРАВЛЕНО: Вычисляем дату дня подготовки
-        // День 1 = 9 февраля 2026, День 2 = 10 февраля, и т.д.
-        const prepDay = new Date(2026, 1, 9 + (dayNum - 1)); // Feb 9 = месяц 1
+        const prepDay = new Date(2026, 1, 9 + (dayNum - 1));
         const dayDateStr = prepDay.toLocaleDateString('en-CA', { timeZone: userTimezone });
-        
-        const isToday = dayDateStr === todayDateStr;
-        
-        if (isToday) {
+        if (dayDateStr === todayDateStr) {
           for (const taskKey in newDayData) {
-            const newValue = newDayData[taskKey];
-            const oldValue = oldDayData[taskKey];
-            if (newValue === true && !oldValue && !todayEarned.includes(taskKey)) {
+            if (newDayData[taskKey] === true && !oldDayData[taskKey] && !todayEarned.includes(taskKey)) {
               const baseXP = XP_VALUES[taskKey] || 10;
-              const currentStreak = oldUser.currentStreak || 0;
-              const streakMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
-              const finalXP = Math.floor(baseXP * streakMultiplier);
-              xpToAdd += finalXP;
+              const streakMultiplier = Math.min(1 + ((oldUser.currentStreak || 0) * 0.1), 3.0);
+              xpToAdd += Math.floor(baseXP * streakMultiplier);
               todayEarned.push(taskKey);
-              console.log(`✅ +${finalXP} XP за ${taskKey} (подготовка день ${dayNum})`);
             }
           }
         }
       }
     }
-    
-    // Проверяем Basic прогресс (по датам)
+
+    // ─── XP за Basic прогресс ───
     if (progressData.basicProgress) {
       const oldBasic = oldUser.basicProgress || {};
       for (const dateKey in progressData.basicProgress) {
-        const newDayData = progressData.basicProgress[dateKey];
-        const oldDayData = oldBasic[dateKey] || {};
-        
-        const isToday = dateKey === todayDateStr;
-        
-        if (isToday) {
+        if (dateKey === todayDateStr) {
+          const newDayData = progressData.basicProgress[dateKey];
+          const oldDayData = oldBasic[dateKey] || {};
           for (const taskKey in newDayData) {
-            const newValue = newDayData[taskKey];
-            const oldValue = oldDayData[taskKey];
-            if (newValue === true && !oldValue && !todayEarned.includes(taskKey)) {
+            if (newDayData[taskKey] === true && !oldDayData[taskKey] && !todayEarned.includes(taskKey)) {
               const baseXP = XP_VALUES[taskKey] || 10;
-              const currentStreak = oldUser.currentStreak || 0;
-              const streakMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
-              const finalXP = Math.floor(baseXP * streakMultiplier);
-              xpToAdd += finalXP;
+              const streakMultiplier = Math.min(1 + ((oldUser.currentStreak || 0) * 0.1), 3.0);
+              xpToAdd += Math.floor(baseXP * streakMultiplier);
               todayEarned.push(taskKey);
-              console.log(`✅ +${finalXP} XP за ${taskKey} (базовый ${dateKey})`);
             }
           }
         }
       }
     }
-    
-    // ✅ ОБНОВЛЯЕМ STREAK
+
+    // ─── ✅ XP за dailyGoalRecords (v2) — С ПОЛНОЙ ЗАЩИТОЙ В БЭКЕНДЕ ───
+    if (progressData.dailyGoalRecords) {
+      const oldRecords = oldUser.dailyGoalRecords || {};
+      const oldEarnedGoalXp = oldUser.earnedGoalXp || {};
+      const todayEarnedGoals = { ...(oldEarnedGoalXp[todayDateStr] || {}) };
+
+      const incomingToday = progressData.dailyGoalRecords[todayDateStr];
+      if (Array.isArray(incomingToday)) {
+        for (const record of incomingToday) {
+          const { categoryId, completed, xpEarned } = record;
+
+          // ЗащИТА 1: категория уже зачтена сегодня
+          if (todayEarnedGoals[categoryId]) {
+            console.log(`🛡️ Блок: повторное начисление XP за ${categoryId} — уже зачтено сегодня`);
+            continue;
+          }
+
+          // ЗащИТА 2: начисляем XP только если completed === true
+          if (!completed) continue;
+
+          // ЗащИТА 3: проверяем maxXP по категории
+          const maxXp = GOAL_CATEGORY_MAX_XP[categoryId] || 100;
+          const safeXp = Math.min(Math.max(parseInt(xpEarned) || 0, 0), maxXp);
+
+          if (safeXp <= 0) continue;
+
+          // ЗащИТА 4: только сегодня можно получить XP
+          const streakMultiplier = Math.min(1 + ((oldUser.currentStreak || 0) * 0.1), 3.0);
+          const finalXp = Math.floor(safeXp * streakMultiplier);
+
+          xpToAdd += finalXp;
+          todayEarnedGoals[categoryId] = true; // запоминаем в БД
+          console.log(`🎯 +${finalXp} XP за цель категории ${categoryId} (x${streakMultiplier.toFixed(2)})`);
+        }
+
+        // Сохраняем earnedGoalXp обратно в БД
+        oldEarnedGoalXp[todayDateStr] = todayEarnedGoals;
+      }
+    }
+
+    // ─── ОБНОВЛЕНИЕ СТРИКА ───
     const lastActiveDate = oldUser.lastActiveDate || '';
-    // ✅ Вычитаем 1 день и форматируем в timezone пользователя
     const yesterdayDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     const yesterdayStr = yesterdayDate.toLocaleDateString('en-CA', { timeZone: userTimezone });
-    
     let newStreak = oldUser.currentStreak || 0;
-    
-    // Проверяем была ли активность сегодня
     const hasActivityToday = xpToAdd > 0;
-    
     if (hasActivityToday) {
-      if (lastActiveDate === yesterdayStr) {
-        // Продолжаем серию
-        newStreak += 1;
-      } else if (lastActiveDate !== todayDateStr) {
-        // Начинаем новую серию
-        newStreak = 1;
-      }
-      // Если lastActiveDate === todayDateStr - уже активен сегодня, не меняем
+      if (lastActiveDate === yesterdayStr) newStreak += 1;
+      else if (lastActiveDate !== todayDateStr) newStreak = 1;
     }
-    
     const longestStreak = Math.max(oldUser.longestStreak || 0, newStreak);
-    
-    // ✅ Создаем объект только с теми полями, которые пришли
-    const updateFields = {
-      updatedAt: new Date()
-    };
 
-    // ✅ Сохраняем зачтённые задачи (ЗДЕСЬ, после объявления updateFields!)
-    const newEarnedTasks = { ...earnedTasksFromDB };
-    newEarnedTasks[todayDateStr] = todayEarned;
-    updateFields.earnedTasks = newEarnedTasks;
-    
-    // ✅ ЗАЩИТА: Не сохраняем пустые объекты/массивы для критических полей
+    // ─── ОБЪЕКТ ОБНОВЛЕНИЯ ───
+    const updateFields = { updatedAt: new Date() };
     const shouldUpdate = (value) => {
       if (value === undefined || value === null) return false;
       if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) return false;
       return true;
     };
-    
-    // ✅ Добавляем только те поля, которые есть в progressData И НЕ пустые
+
+    // earnedTasks (старая система)
+    const newEarnedTasks = { ...earnedTasksFromDB };
+    newEarnedTasks[todayDateStr] = todayEarned;
+    updateFields.earnedTasks = newEarnedTasks;
+
+    // earnedGoalXp (новая система v2)
+    if (progressData.dailyGoalRecords) {
+      const oldEarnedGoalXp = oldUser.earnedGoalXp || {};
+      // Уже обновили выше — пишем в поле
+      // Копируем обновлённый объект
+      const mergedEarnedGoalXp = { ...oldEarnedGoalXp };
+      if (progressData.dailyGoalRecords[todayDateStr]) {
+        // todayEarnedGoals уже обновлён в цикле выше — восстанавливаем
+        const todayEarnedGoals = mergedEarnedGoalXp[todayDateStr] || {};
+        // Применяем начисленные категории
+        for (const record of (progressData.dailyGoalRecords[todayDateStr] || [])) {
+          if (record.completed && !todayEarnedGoals[record.categoryId]) {
+            const maxXp = GOAL_CATEGORY_MAX_XP[record.categoryId] || 100;
+            if (Math.min(Math.max(parseInt(record.xpEarned) || 0, 0), maxXp) > 0) {
+              todayEarnedGoals[record.categoryId] = true;
+            }
+          }
+        }
+        mergedEarnedGoalXp[todayDateStr] = todayEarnedGoals;
+      }
+      updateFields.earnedGoalXp = mergedEarnedGoalXp;
+    }
+
     if (progressData.name !== undefined) updateFields.name = progressData.name;
     if (progressData.username !== undefined) updateFields.username = progressData.username;
     if (progressData.photoUrl !== undefined) updateFields.photoUrl = progressData.photoUrl;
     if (progressData.registrationDate !== undefined) updateFields.registrationDate = progressData.registrationDate;
-    
-    // ✅ КРИТИЧЕСКИЕ ПОЛЯ
     if (shouldUpdate(progressData.progress)) updateFields.progress = progressData.progress;
     if (shouldUpdate(progressData.preparationProgress)) updateFields.preparationProgress = progressData.preparationProgress;
     if (shouldUpdate(progressData.basicProgress)) updateFields.basicProgress = progressData.basicProgress;
-    
-    // Массивы и другие поля
+
+    // memorizedNames - только растёт
     if (progressData.memorizedNames !== undefined) {
       const oldMemorized = oldUser.memorizedNames || [];
       const incoming = progressData.memorizedNames || [];
-
-      // ✅ Merge — массив только растёт
       const merged = [...new Set([...oldMemorized, ...incoming])];
       updateFields.memorizedNames = merged;
-
-      // ✅ XP только за действительно новые (разница merged vs old)
       const newlyMemorized = merged.filter(id => !oldMemorized.includes(id));
       if (newlyMemorized.length > 0) {
         xpToAdd += newlyMemorized.length * 100;
-        console.log(`📿 +${newlyMemorized.length * 100} XP за ${newlyMemorized.length} новых имён: [${newlyMemorized.join(', ')}]`);
-      }
-
-      if (incoming.length < oldMemorized.length) {
-        console.log(`🛡️ Попытка убрать ${oldMemorized.length - incoming.length} имён — заблокировано`);
+        console.log(`📿 +${newlyMemorized.length * 100} XP за новые имена`);
       }
     }
-    // ✅ completedJuzs - UI прогресс, принимаем как есть
+
     if (progressData.completedJuzs !== undefined) updateFields.completedJuzs = progressData.completedJuzs;
 
-    // ✅ earnedJuzXpIds - только растёт (merge), XP за новые пары
     if (progressData.earnedJuzXpIds !== undefined) {
       const oldEarned = oldUser.earnedJuzXpIds || [];
       const incoming = progressData.earnedJuzXpIds || [];
       const merged = [...new Set([...oldEarned, ...incoming])];
       updateFields.earnedJuzXpIds = merged;
-
       const newlyEarned = merged.filter(id => !oldEarned.includes(id));
       if (newlyEarned.length > 0) {
         xpToAdd += newlyEarned.length * 150;
-        console.log(`📖 +${newlyEarned.length * 150} XP за ${newlyEarned.length} новых пар: [${newlyEarned.join(', ')}]`);
-      }
-      if (incoming.length < oldEarned.length) {
-        console.log(`🛡️ Попытка убрать ${oldEarned.length - incoming.length} пар — заблокировано`);
+        console.log(`📖 +${newlyEarned.length * 150} XP за новые пары`);
       }
     }
 
-    // ✅ quranKhatams - XP только за ПЕРВЫЙ хатым
     if (progressData.quranKhatams !== undefined) {
       const oldKhatams = oldUser.quranKhatams || 0;
       const newKhatams = progressData.quranKhatams || 0;
-      if (newKhatams > oldKhatams && oldKhatams === 0) {
-        xpToAdd += 1000;
-        console.log(`🕋 +1000 XP за первый хатым!`);
-      }
+      if (newKhatams > oldKhatams && oldKhatams === 0) { xpToAdd += 1000; console.log(`🕋 +1000 XP за первый хатым!`); }
       updateFields.quranKhatams = newKhatams;
     }
+
     if (progressData.completedTasks !== undefined) updateFields.completedTasks = progressData.completedTasks;
     if (progressData.deletedPredefinedTasks !== undefined) updateFields.deletedPredefinedTasks = progressData.deletedPredefinedTasks;
     if (progressData.customTasks !== undefined) updateFields.customTasks = progressData.customTasks;
@@ -439,47 +358,83 @@ async function updateUserProgress(userId, progressData) {
     if (progressData.dailyQuranGoal !== undefined) updateFields.dailyQuranGoal = progressData.dailyQuranGoal;
     if (progressData.dailyCharityGoal !== undefined) updateFields.dailyCharityGoal = progressData.dailyCharityGoal;
     if (progressData.language !== undefined) updateFields.language = progressData.language;
-    
-    // ✅ XP - НЕ берём с фронта, считаем сами!
-    updateFields.xp = (oldUser.xp || 0) + xpToAdd;
-    
     if (progressData.hasRedeemedReferral !== undefined) updateFields.hasRedeemedReferral = progressData.hasRedeemedReferral;
     if (progressData.unlockedBadges !== undefined) updateFields.unlockedBadges = progressData.unlockedBadges;
-    
-    // ✅ STREAK данные
+
+    // ─── ✅ НОВЫЕ ПОЛЯ v2 ───
+    // dailyGoalRecords: принимаем всю историю, но ЗАПРЕЩАЕМ изменять уже зачтенные
+    if (progressData.dailyGoalRecords !== undefined) {
+      const oldRecords = oldUser.dailyGoalRecords || {};
+      const incoming = progressData.dailyGoalRecords || {};
+      const earnedGoalXpNow = oldUser.earnedGoalXp || {};
+
+      const merged = { ...oldRecords };
+      for (const dateKey in incoming) {
+        const incomingArr = incoming[dateKey];
+        if (!Array.isArray(incomingArr)) continue;
+
+        if (dateKey !== todayDateStr) {
+          // Прошлые дни — принимаем если не было в БД
+          if (!merged[dateKey]) merged[dateKey] = incomingArr;
+        } else {
+          // Сегодня: защита выполненных записей
+          const earnedToday = earnedGoalXpNow[todayDateStr] || {};
+          const existingToday = oldRecords[todayDateStr] || [];
+
+          const protectedRecords = incomingArr.map(rec => {
+            // Если категория уже зачтена в БД — блокируем изменение
+            if (earnedToday[rec.categoryId]) {
+              const dbRecord = existingToday.find(r => r.categoryId === rec.categoryId);
+              return dbRecord || rec;
+            }
+            return rec;
+          });
+          merged[todayDateStr] = protectedRecords;
+        }
+      }
+      updateFields.dailyGoalRecords = merged;
+    }
+
+    // goalCustomItems — принимаем как есть (UI контролирует)
+    if (progressData.goalCustomItems !== undefined) updateFields.goalCustomItems = progressData.goalCustomItems || {};
+
+    // goalStreaks — обновляем только если значение растёт (защита от уменьшения)
+    if (progressData.goalStreaks !== undefined) {
+      const oldStreaks = oldUser.goalStreaks || {};
+      const incoming = progressData.goalStreaks || {};
+      const mergedStreaks = { ...oldStreaks };
+      for (const catId in incoming) {
+        const incomingVal = parseInt(incoming[catId]) || 0;
+        const oldVal = oldStreaks[catId] || 0;
+        // Число может обннуляться до 0 (streak reset), но не может прыгнуть больше чем +2 за раз
+        if (incomingVal <= oldVal + 1) mergedStreaks[catId] = incomingVal;
+        else mergedStreaks[catId] = oldVal; // блокируем невалидный прыжок
+      }
+      updateFields.goalStreaks = mergedStreaks;
+    }
+
+    // XP — считаем САМИ, не берём с фронта
+    updateFields.xp = (oldUser.xp || 0) + xpToAdd;
+
+    // Стрик
     if (hasActivityToday) {
       updateFields.currentStreak = newStreak;
       updateFields.longestStreak = longestStreak;
       updateFields.lastActiveDate = todayDateStr;
     }
-    
+
     const result = await usersCollection.updateOne(
       { userId: parseInt(userId) },
       { $set: updateFields }
     );
-    
+
     if (result.modifiedCount > 0 || xpToAdd > 0) {
       console.log(`✅ Прогресс обновлен для userId: ${userId}, начислено XP: ${xpToAdd}`);
-      
-      // ✅ Возвращаем данные о начисленном XP
       const currentStreak = hasActivityToday ? newStreak : (oldUser.currentStreak || 0);
       const streakMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
-      
-      return {
-        success: true,
-        xpAdded: xpToAdd,
-        streakMultiplier: xpToAdd > 0 ? streakMultiplier : 1.0,
-        currentStreak: currentStreak
-      };
+      return { success: true, xpAdded: xpToAdd, streakMultiplier: xpToAdd > 0 ? streakMultiplier : 1.0, currentStreak };
     }
-
-    console.log('⚠️ Прогресс не изменился для userId:', userId);
-    return {
-      success: true,
-      xpAdded: 0,
-      streakMultiplier: 1.0,
-      currentStreak: oldUser.currentStreak || 0
-    };
+    return { success: true, xpAdded: 0, streakMultiplier: 1.0, currentStreak: oldUser.currentStreak || 0 };
   } catch (error) {
     console.error('❌ updateUserProgress ошибка:', error);
     throw error;
@@ -487,16 +442,14 @@ async function updateUserProgress(userId, progressData) {
 }
 
 /**
- * Получить полные данные пользователя для Mini App
+ * Получить полные данные для Mini App
  */
 async function getUserFullData(userId) {
   try {
     const db = getDB();
-    const usersCollection = db.collection('users');
-    const user = await usersCollection.findOne({ userId: parseInt(userId) });
-    
+    const user = await db.collection('users').findOne({ userId: parseInt(userId) });
     if (!user) return null;
-    
+
     return {
       userId: user.userId,
       username: user.username,
@@ -507,8 +460,8 @@ async function getUserFullData(userId) {
       startDate: user.startDate,
       registrationDate: user.createdAt || user.registrationDate,
       progress: user.progress || {},
-      preparationProgress: user.preparationProgress || {},  // ✅ ДОБАВЬТЕ
-      basicProgress: user.basicProgress || {},  // ✅ ДОБАВЬТЕ
+      preparationProgress: user.preparationProgress || {},
+      basicProgress: user.basicProgress || {},
       memorizedNames: user.memorizedNames || [],
       completedJuzs: user.completedJuzs || [],
       earnedJuzXpIds: user.earnedJuzXpIds || [],
@@ -525,11 +478,17 @@ async function getUserFullData(userId) {
       myPromoCode: user.promoCode,
       hasRedeemedReferral: user.hasRedeemedReferral || false,
       unlockedBadges: user.unlockedBadges || [],
-      currentStreak: user.currentStreak || 0,  // ✅ ДОБАВЬТЕ
-      longestStreak: user.longestStreak || 0,  // ✅ ДОБАВЬТЕ
-      lastActiveDate: user.lastActiveDate || '',  // ✅ ДОБАВЬТЕ
-      subscriptionExpiresAt: user.subscriptionExpiresAt || null, // ✅ ДОБАВЛЕНО
-      daysLeft: user.subscriptionExpiresAt ? Math.ceil((new Date(user.subscriptionExpiresAt) - new Date()) / (1000 * 60 * 60 * 24)) : null // ✅ ДОБАВЛЕНО
+      currentStreak: user.currentStreak || 0,
+      longestStreak: user.longestStreak || 0,
+      lastActiveDate: user.lastActiveDate || '',
+      subscriptionExpiresAt: user.subscriptionExpiresAt || null,
+      daysLeft: user.subscriptionExpiresAt
+        ? Math.ceil((new Date(user.subscriptionExpiresAt) - new Date()) / (1000 * 60 * 60 * 24))
+        : null,
+      // ✅ НОВЫЕ ПОЛЯ v2
+      dailyGoalRecords: user.dailyGoalRecords || {},
+      goalCustomItems: user.goalCustomItems || {},
+      goalStreaks: user.goalStreaks || {},
     };
   } catch (error) {
     console.error('❌ getUserFullData ошибка:', error);
@@ -544,703 +503,238 @@ async function getUserFullData(userId) {
 async function updateUserOnboarding(userId, data) {
   const db = getDB();
   const users = db.collection('users');
-  
-  const updateData = {
-    ...data,
-    updatedAt: new Date()
-  };
-  
-  const result = await users.updateOne(
-    { userId },
-    { $set: updateData }
-  );
-  
+  const result = await users.updateOne({ userId }, { $set: { ...data, updatedAt: new Date() } });
   return result.modifiedCount > 0;
 }
 
 async function checkPromoCode(promoCode, userId) {
   const db = getDB();
   const users = db.collection('users');
-
   const normalizedCode = promoCode.toUpperCase();
-
-  // Ищем владельца промокода
   const owner = await users.findOne({ promoCode: normalizedCode });
-
-  if (!owner) {
-    return { valid: false, reason: 'not_found' };
-  }
-
-  // Нельзя использовать свой промокод
-  if (owner.userId === userId) {
-    return { valid: false, reason: 'own_code' };
-  }
-
-  // Владелец промокода должен быть платящим пользователем
-  if (owner.paymentStatus !== 'paid') {
-    return { valid: false, reason: 'owner_not_paid' };
-  }
-
-  // ✅ Больше НЕ проверяем used_promocodes — промокод может использовать много людей
+  if (!owner) return { valid: false, reason: 'not_found' };
+  if (owner.userId === userId) return { valid: false, reason: 'own_code' };
+  if (owner.paymentStatus !== 'paid') return { valid: false, reason: 'owner_not_paid' };
   return { valid: true, owner };
 }
 
 async function updatePaymentStatus(userId, status, additionalData = {}) {
   const db = getDB();
   const users = db.collection('users');
-  
-  const updateData = {
-    paymentStatus: status,
-    updatedAt: new Date(),
-    ...additionalData
-  };
-  
-  const result = await users.updateOne(
-    { userId },
-    { $set: updateData }
-  );
-  
+  const result = await users.updateOne({ userId }, { $set: { paymentStatus: status, updatedAt: new Date(), ...additionalData } });
   console.log(`💳 Статус оплаты пользователя ${userId}: ${status}`);
-  
   return result.modifiedCount > 0;
 }
 
 async function approvePayment(userId) {
   const db = getDB();
   const users = db.collection('users');
-  
   const user = await users.findOne({ userId });
-  
-  // ✅ ПОДПИСКА НА 90 ДНЕЙ
   const subscriptionExpiresAt = new Date();
   subscriptionExpiresAt.setDate(subscriptionExpiresAt.getDate() + 90);
-  
-  const updateData = {
-    paymentStatus: 'paid',
-    accessType: 'full',
-    paymentDate: new Date(),
-    subscriptionExpiresAt: subscriptionExpiresAt, // ✅ НОВОЕ
-    subscriptionNotified3Days: false, // ✅ Сбрасываем флаги уведомлений
-    subscriptionNotified1Day: false,  // ✅ Сбрасываем флаги уведомлений
-    onboardingCompleted: true,
-    updatedAt: new Date()
-  };
-  
-  await users.updateOne({ userId }, { $set: updateData });
-  
-  // ✅ НАЧИСЛЯЕМ XP РЕФЕРЕРУ ЗА ОПЛАТУ
+  await users.updateOne({ userId }, {
+    $set: {
+      paymentStatus: 'paid', accessType: 'full', paymentDate: new Date(),
+      subscriptionExpiresAt, subscriptionNotified3Days: false, subscriptionNotified1Day: false,
+      onboardingCompleted: true, updatedAt: new Date()
+    }
+  });
   if (user.referredBy) {
     const referrer = await users.findOne({ promoCode: user.referredBy });
-    if (referrer) {
-      await addReferralXP(referrer.userId, 'payment', userId, user.name);
-    }
+    if (referrer) await addReferralXP(referrer.userId, 'payment', userId, user.name);
   }
-  
-  console.log(`✅ Оплата подтверждена для пользователя ${userId}`);
-  console.log(`📅 Подписка активна до: ${subscriptionExpiresAt.toLocaleDateString('ru-RU')}`);
-  
   return true;
 }
 
 async function rejectPayment(userId) {
   const db = getDB();
   const users = db.collection('users');
-  
-  // ✅ Получаем текущие данные пользователя
   const user = await users.findOne({ userId });
-  
-  let demoExpiresAt = null;
-  let accessType = null;
-  let demoStatus = 'none'; // none, active, given_new
-  
-  // ✅ ПРОВЕРКА 1: Если демо УЖЕ активен и НЕ истёк - НЕ ТРОГАЕМ!
+  let demoExpiresAt = null, accessType = null, demoStatus = 'none';
   if (user.accessType === 'demo' && user.demoExpiresAt && new Date() < new Date(user.demoExpiresAt)) {
-    demoExpiresAt = user.demoExpiresAt; // Оставляем старую дату
-    accessType = 'demo';
-    demoStatus = 'active';
-    console.log(`ℹ️ Демо-режим ещё активен до ${demoExpiresAt}. Не перезапускаем.`);
-  } 
-  // ✅ ПРОВЕРКА 2: Если демо НЕ активен, но уже давали раньше - НЕ ДАЁМ повторно
-  else if (user.demoGivenOnRejection || user.demoActivatedManually) {
-    demoExpiresAt = null;
-    accessType = null;
+    demoExpiresAt = user.demoExpiresAt; accessType = 'demo'; demoStatus = 'active';
+  } else if (user.demoGivenOnRejection || user.demoActivatedManually) {
     demoStatus = 'none';
-    console.log(`⚠️ Пользователь ${userId} уже получал демо. Не даётся повторно.`);
-  } 
-  // ✅ ПРОВЕРКА 3: Первый раз получает демо при отклонении
-  else {
+  } else {
     demoExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    accessType = 'demo';
-    demoStatus = 'given_new';
-    console.log(`🎁 Первое отклонение. Даём демо-доступ до ${demoExpiresAt}`);
+    accessType = 'demo'; demoStatus = 'given_new';
   }
-  
-  const updateData = {
-    paymentStatus: 'unpaid',
-    accessType: accessType,
-    demoExpiresAt: demoExpiresAt,
-    demoGivenOnRejection: demoStatus === 'given_new' ? true : user.demoGivenOnRejection,
-    updatedAt: new Date()
-    // ✅ usedPromoCode и referredBy НЕ ТРОГАЕМ!
-  };
-  
-  await users.updateOne({ userId }, { $set: updateData });
-  
-  console.log(`❌ Оплата отклонена для пользователя ${userId}. Статус демо: ${demoStatus}`);
-  
+  await users.updateOne({ userId }, {
+    $set: { paymentStatus: 'unpaid', accessType, demoExpiresAt,
+      demoGivenOnRejection: demoStatus === 'given_new' ? true : user.demoGivenOnRejection,
+      updatedAt: new Date() }
+  });
   return { demoStatus, demoExpiresAt };
 }
 
 async function getPendingPayments() {
-  const db = getDB();
-  const users = db.collection('users');
-  
-  return await users.find({ paymentStatus: 'pending' }).toArray();
+  return await getDB().collection('users').find({ paymentStatus: 'pending' }).toArray();
 }
 
 async function checkDemoExpiration(userId) {
-  const db = getDB();
-  const users = db.collection('users');
-  
-  const user = await users.findOne({ userId });
-  
-  if (!user || user.accessType !== 'demo') {
-    return false;
-  }
-  
-  const expiresAt = new Date(user.demoExpiresAt);
-  const isExpired = expiresAt < new Date();
-  
-  return isExpired;
+  const user = await getDB().collection('users').findOne({ userId });
+  if (!user || user.accessType !== 'demo') return false;
+  return new Date(user.demoExpiresAt) < new Date();
 }
 
-/**
- * Получить информацию о доступе пользователя (для Mini App)
- */
 async function getUserAccess(userId) {
   const MAIN_ADMIN = parseInt(process.env.MAIN_ADMIN_ID);
-  
-  // 🔥 АДМИН ВСЕГДА ИМЕЕТ ДОСТУП
-  if (userId === MAIN_ADMIN) {
-    return {
-      hasAccess: true,
-      paymentStatus: 'paid',
-      reason: 'admin_access'
-    };
-  }
-  
-  const db = getDB();
-  const users = db.collection('users');
-  
-  const user = await users.findOne({ userId });
-  
-  // Пользователь не найден
-  if (!user) {
-    return { 
-      hasAccess: false, 
-      paymentStatus: 'unpaid',
-      reason: 'user_not_found' 
-    };
-  }
-  
-  // 🔥 ДЕМО-ДОСТУП (ПРОВЕРЯЕМ ПЕРВЫМ!)
+  if (userId === MAIN_ADMIN) return { hasAccess: true, paymentStatus: 'paid', reason: 'admin_access' };
+  const user = await getDB().collection('users').findOne({ userId });
+  if (!user) return { hasAccess: false, paymentStatus: 'unpaid', reason: 'user_not_found' };
   if (user.accessType === 'demo' && user.demoExpiresAt) {
     const expiresAt = new Date(user.demoExpiresAt);
-    
-    if (expiresAt > new Date()) {
-      return { 
-        hasAccess: true, 
-        paymentStatus: 'demo',
-        demoExpires: expiresAt.toISOString()
-      };
-    } else {
-      // Демо истекло
-      return { 
-        hasAccess: false, 
-        paymentStatus: 'unpaid',
-        reason: 'demo_expired' 
-      };
-    }
+    if (expiresAt > new Date()) return { hasAccess: true, paymentStatus: 'demo', demoExpires: expiresAt.toISOString() };
+    return { hasAccess: false, paymentStatus: 'unpaid', reason: 'demo_expired' };
   }
-  
-  // ✅ ПРОВЕРКА ПОДПИСКИ (90 дней)
   if (user.paymentStatus === 'paid') {
-    // Если есть subscriptionExpiresAt - проверяем истекла ли подписка
     if (user.subscriptionExpiresAt) {
-      const now = new Date();
-      const expiresAt = new Date(user.subscriptionExpiresAt);
-      
+      const now = new Date(), expiresAt = new Date(user.subscriptionExpiresAt);
       if (now < expiresAt) {
-        // Подписка активна
-        const daysLeft = Math.ceil((expiresAt - now) / (1000 * 60 * 60 * 24));
-        return { 
-          hasAccess: true, 
-          paymentStatus: 'paid', 
-          subscriptionExpires: user.subscriptionExpiresAt,
-          daysLeft: daysLeft
-        };
-      } else {
-        // Подписка истекла
-        return { 
-          hasAccess: false, 
-          paymentStatus: 'subscription_expired', 
-          reason: 'Подписка истекла',
-          subscriptionExpired: true
-        };
+        return { hasAccess: true, paymentStatus: 'paid', subscriptionExpires: user.subscriptionExpiresAt, daysLeft: Math.ceil((expiresAt - now) / (1000 * 60 * 60 * 24)) };
       }
+      return { hasAccess: false, paymentStatus: 'subscription_expired', reason: 'Подписка истекла', subscriptionExpired: true };
     }
-    
-    // ✅ Старые пользователи без subscriptionExpiresAt - даём доступ (обратная совместимость)
-    return { 
-      hasAccess: true, 
-      paymentStatus: 'paid',
-      reason: 'legacy_user'
-    };
+    return { hasAccess: true, paymentStatus: 'paid', reason: 'legacy_user' };
   }
-  
-  // Платёж на проверке
   if (user.paymentStatus === 'pending') {
-    // ✅ Если был в демо и отправил чек - СОХРАНЯЕМ demo доступ до одобрения
-    if (user.accessType === 'demo' && user.demoExpiresAt && new Date() < new Date(user.demoExpiresAt)) {
-      return { 
-        hasAccess: true, 
-        paymentStatus: 'demo', 
-        demoExpires: user.demoExpiresAt,
-        paymentPending: true // ← Флаг что чек на проверке
-      };
-    }
-    
-    // Если демо истекло или не было - блокируем
-    return { 
-      hasAccess: false, 
-      paymentStatus: 'pending',
-      reason: 'payment_pending'
-    };
+    if (user.accessType === 'demo' && user.demoExpiresAt && new Date() < new Date(user.demoExpiresAt))
+      return { hasAccess: true, paymentStatus: 'demo', demoExpires: user.demoExpiresAt, paymentPending: true };
+    return { hasAccess: false, paymentStatus: 'pending', reason: 'payment_pending' };
   }
-  
-  // Подписка истекла (отдельный статус)
-  if (user.paymentStatus === 'subscription_expired') {
-    return { 
-      hasAccess: false, 
-      paymentStatus: 'subscription_expired',
-      reason: 'subscription_expired'
-    };
-  }
-  
-  // Не оплачено
-  return { 
-    hasAccess: false, 
-    paymentStatus: 'unpaid',
-    reason: 'not_paid'
-  };
+  if (user.paymentStatus === 'subscription_expired') return { hasAccess: false, paymentStatus: 'subscription_expired', reason: 'subscription_expired' };
+  return { hasAccess: false, paymentStatus: 'unpaid', reason: 'not_paid' };
 }
 
-/**
- * Добавить XP пользователю
- */
 async function addUserXP(userId, amount, reason = '') {
   try {
-    const db = getDB();
-    const users = db.collection('users');
-    
-    const result = await users.updateOne(
+    const result = await getDB().collection('users').updateOne(
       { userId: parseInt(userId) },
-      { 
-        $inc: { xp: amount },
-        $set: { updatedAt: new Date() }
-      }
+      { $inc: { xp: amount }, $set: { updatedAt: new Date() } }
     );
-    
     if (result.modifiedCount > 0) {
       await checkAndUnlockBadges(userId);
       console.log(`✅ Добавлено ${amount} XP для userId ${userId}. Причина: ${reason}`);
       return true;
     }
-    
-    console.log(`⚠️ Не удалось добавить XP для userId ${userId}`);
     return false;
-  } catch (error) {
-    console.error('❌ addUserXP ошибка:', error);
-    throw error;
-  }
+  } catch (error) { console.error('❌ addUserXP:', error); throw error; }
 }
 
-/**
- * Получить глобальный лидерборд (топ пользователей по XP)
- */
 async function getGlobalLeaderboard(limit = 50) {
   try {
-    const db = getDB();
-    const users = db.collection('users');
-    
-    const leaderboard = await users.find({
-      paymentStatus: { $in: ['paid', 'demo'] }, // Только активные пользователи
-      xp: { $gt: 0 } // У кого есть XP
-    })
-    .sort({ xp: -1 }) // Сортировка по убыванию XP
-    .limit(limit)
-    .project({
-      userId: 1,
-      username: 1,
-      name: 1,
-      photoUrl: 1,
-      xp: 1,
-      currentStreak: 1,
-      unlockedBadges: 1,
-      invitedCount: 1
-    })
-    .toArray();
-    
-    return leaderboard;
-  } catch (error) {
-    console.error('❌ getGlobalLeaderboard ошибка:', error);
-    throw error;
-  }
+    return await getDB().collection('users').find({ paymentStatus: { $in: ['paid', 'demo'] }, xp: { $gt: 0 } })
+      .sort({ xp: -1 }).limit(limit)
+      .project({ userId: 1, username: 1, name: 1, photoUrl: 1, xp: 1, currentStreak: 1, unlockedBadges: 1, invitedCount: 1 })
+      .toArray();
+  } catch (error) { console.error('❌ getGlobalLeaderboard:', error); throw error; }
 }
 
-/**
- * Получить рейтинг пользователя (его позицию в лидерборде)
- */
 async function getUserRank(userId) {
   try {
-    const db = getDB();
-    const users = db.collection('users');
-    
+    const users = getDB().collection('users');
     const user = await users.findOne({ userId: parseInt(userId) });
-    
-    if (!user) {
-      return { rank: null, totalUsers: 0 };
-    }
-    
-    // Считаем сколько пользователей имеют больше XP
-    const rank = await users.countDocuments({
-      paymentStatus: { $in: ['paid', 'demo'] },
-      xp: { $gt: user.xp }
-    }) + 1;
-    
-    const totalUsers = await users.countDocuments({
-      paymentStatus: { $in: ['paid', 'demo'] },
-      xp: { $gt: 0 }
-    });
-    
+    if (!user) return { rank: null, totalUsers: 0 };
+    const rank = await users.countDocuments({ paymentStatus: { $in: ['paid', 'demo'] }, xp: { $gt: user.xp } }) + 1;
+    const totalUsers = await users.countDocuments({ paymentStatus: { $in: ['paid', 'demo'] }, xp: { $gt: 0 } });
     return { rank, totalUsers, userXP: user.xp };
-  } catch (error) {
-    console.error('❌ getUserRank ошибка:', error);
-    throw error;
-  }
+  } catch (error) { console.error('❌ getUserRank:', error); throw error; }
 }
 
-/**
- * Получить лидерборд друзей (пользователей приглашенных одним реферером)
- */
 async function getFriendsLeaderboard(userId, limit = 20) {
   try {
-    const db = getDB();
-    const users = db.collection('users');
-    
-    // Получаем промокод пользователя
+    const users = getDB().collection('users');
     const user = await users.findOne({ userId: parseInt(userId) });
-    
-    if (!user) {
-      return [];
-    }
-    
-    // Находим всех кто был приглашен этим промокодом
-    const friends = await users.find({
-      referredBy: user.promoCode,
-      paymentStatus: { $in: ['paid', 'demo'] }
-    })
-    .sort({ xp: -1 })
-    .limit(limit)
-    .project({
-      userId: 1,
-      username: 1,
-      name: 1,
-      photoUrl: 1,
-      xp: 1,
-      currentStreak: 1,
-      unlockedBadges: 1
-    })
-    .toArray();
-    
-    return friends;
-  } catch (error) {
-    console.error('❌ getFriendsLeaderboard ошибка:', error);
-    throw error;
-  }
+    if (!user) return [];
+    return await users.find({ referredBy: user.promoCode, paymentStatus: { $in: ['paid', 'demo'] } })
+      .sort({ xp: -1 }).limit(limit)
+      .project({ userId: 1, username: 1, name: 1, photoUrl: 1, xp: 1, currentStreak: 1, unlockedBadges: 1 })
+      .toArray();
+  } catch (error) { console.error('❌ getFriendsLeaderboard:', error); throw error; }
 }
 
-// Функция для проверки и выдачи новых бейджей
 async function checkAndUnlockBadges(userId) {
   try {
-    const db = getDB();
-    const users = db.collection('users');
+    const users = getDB().collection('users');
     const user = await users.findOne({ userId });
-    
     if (!user) return;
-    
     const unlockedBadges = user.unlockedBadges || [];
     let newBadges = [...unlockedBadges];
-    
-    // Проверка: Друг народа (10+ рефералов)
-    if ((user.invitedCount || 0) >= 10 && !newBadges.includes('social_butterfly')) {
-      newBadges.push('social_butterfly');
-    }
-    
-    // Проверка: Лидер друзей (1 место среди друзей)
+    if ((user.invitedCount || 0) >= 10 && !newBadges.includes('social_butterfly')) newBadges.push('social_butterfly');
     const friendsLeaderboard = await getFriendsLeaderboard(userId, 20);
-    if (friendsLeaderboard && friendsLeaderboard.length > 0 && friendsLeaderboard[0].userId === userId && !newBadges.includes('friends_leader')) {
-      newBadges.push('friends_leader');
-    }
-    
-    // Проверка: Легенда (10000+ XP)
-    if (user.xp >= 10000 && !newBadges.includes('legend')) {
-      newBadges.push('legend');
-    }
-    
-    // Если есть новые бейджи - обновить
+    if (friendsLeaderboard?.length > 0 && friendsLeaderboard[0].userId === userId && !newBadges.includes('friends_leader')) newBadges.push('friends_leader');
+    if (user.xp >= 10000 && !newBadges.includes('legend')) newBadges.push('legend');
     if (newBadges.length > unlockedBadges.length) {
-      await users.updateOne(
-        { userId },
-        { $set: { unlockedBadges: newBadges } }
-      );
-      console.log(`✨ Пользователь ${userId} получил новые бейджи:`, newBadges.filter(b => !unlockedBadges.includes(b)));
+      await users.updateOne({ userId }, { $set: { unlockedBadges: newBadges } });
     }
-    
     return newBadges;
-  } catch (error) {
-    console.error('Ошибка проверки бейджей:', error);
-    return [];
-  }
+  } catch (error) { console.error('Ошибка checkAndUnlockBadges:', error); return []; }
 }
 
-// Получить список всех стран пользователей
 async function getCountries() {
   try {
-    const db = getDB();
-    const users = db.collection('users');
-    
-    const countries = await users.distinct('location.country', {
-      'location.country': { $ne: null },
-      'location.country': { $ne: '' },
-      onboardingCompleted: true
-    });
-    
-    // ✅ Нормализация к английским названиям
-    const countryNormalization = {
-      'Қазақстан': 'Kazakhstan',
-      'Ресей': 'Russia',
-      'Россия': 'Russia',
-      'Түркия': 'Turkey',
-      'Турция': 'Turkey',
-      'Өзбекстан': 'Uzbekistan',
-      'Узбекистан': 'Uzbekistan'
-    };
-    
-    const normalized = countries
-      .map(country => countryNormalization[country] || country)
-      .filter(c => c && c !== 'Unknown');
-    
-    const unique = [...new Set(normalized)];
-    
-    return unique.sort();
-  } catch (error) {
-    console.error('❌ Ошибка получения стран:', error);
-    return [];
-  }
+    const countries = await getDB().collection('users').distinct('location.country', { 'location.country': { $ne: null }, onboardingCompleted: true });
+    const norm = { 'Қазақстан': 'Kazakhstan', 'Ресей': 'Russia', 'Россия': 'Russia', 'Түркия': 'Turkey', 'Турция': 'Turkey', 'Өзбекстан': 'Uzbekistan', 'Узбекистан': 'Uzbekistan' };
+    return [...new Set(countries.map(c => norm[c] || c).filter(c => c && c !== 'Unknown'))].sort();
+  } catch (error) { return []; }
 }
 
-// Получить список городов в стране
 async function getCities(country) {
   try {
-    const db = getDB();
-    const users = db.collection('users');
-    
-    const cities = await users.distinct('location.city', {
-      'location.country': country,
-      'location.city': { $ne: null },
-      'location.city': { $ne: '' },
-      onboardingCompleted: true
-    });
-    
+    const cities = await getDB().collection('users').distinct('location.city', { 'location.country': country, 'location.city': { $ne: null }, onboardingCompleted: true });
     return cities.filter(c => c && c !== 'Unknown').sort();
-  } catch (error) {
-    console.error('❌ Ошибка получения городов:', error);
-    return [];
-  }
+  } catch (error) { return []; }
 }
 
-// Лидерборд с фильтрами по стране/городу
 async function getFilteredLeaderboard(options = {}) {
   try {
     const { limit = 50, offset = 0, country = null, city = null } = options;
-    const db = getDB();
-    const users = db.collection('users');
-    
-    // Базовый фильтр
-    const filter = {
-      onboardingCompleted: true,
-      xp: { $gt: 0 }
-    };
-    
-    // Фильтр по стране
-    if (country) {
-      filter['location.country'] = country;
-    }
-    
-    // Фильтр по городу
-    if (city) {
-      filter['location.city'] = city;
-    }
-    
-    // Получаем лидерборд
-    const leaderboard = await users
-      .find(filter)
-      .sort({ xp: -1 })
-      .skip(offset)
-      .limit(limit)
-      .project({
-        userId: 1,
-        username: 1,
-        name: 1,
-        photoUrl: 1,
-        xp: 1,
-        currentStreak: 1,
-        unlockedBadges: 1,
-        invitedCount: 1,
-        'location.city': 1,
-        'location.country': 1
-      })
+    const filter = { onboardingCompleted: true, xp: { $gt: 0 } };
+    if (country) filter['location.country'] = country;
+    if (city) filter['location.city'] = city;
+    const leaderboard = await getDB().collection('users').find(filter).sort({ xp: -1 }).skip(offset).limit(limit)
+      .project({ userId: 1, username: 1, name: 1, photoUrl: 1, xp: 1, currentStreak: 1, unlockedBadges: 1, invitedCount: 1, 'location.city': 1, 'location.country': 1 })
       .toArray();
-    
-    // Считаем общее количество
-    const total = await users.countDocuments(filter);
-    
-    return {
-      data: leaderboard,
-      total,
-      hasMore: offset + limit < total
-    };
-  } catch (error) {
-    console.error('❌ Ошибка получения лидерборда с фильтрами:', error);
-    throw error;
-  }
+    const total = await getDB().collection('users').countDocuments(filter);
+    return { data: leaderboard, total, hasMore: offset + limit < total };
+  } catch (error) { console.error('❌ getFilteredLeaderboard:', error); throw error; }
 }
 
-/**
- * Начисление XP за реферала
- * @param {number} userId - ID реферера
- * @param {string} type - 'registration' или 'payment'
- * @param {number} referredUserId - ID реферала
- * @param {string} referredUserName - Имя реферала
- */
 async function addReferralXP(userId, type = 'registration', referredUserId = null, referredUserName = null) {
   try {
-    const db = getDB();
-    const users = db.collection('users');
-    
-    // ✅ Текущая дата в Almaty timezone
     const now = new Date();
     const todayDateStr = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Almaty' });
-    // Для рефералов — Алматы достаточно, рефереры преимущественно в КЗ
-    
-    // ✅ Проверка: до 20 марта включительно
     const eidDate = new Date('2026-03-20T23:59:59+05:00');
-    if (now > eidDate) {
-      console.log('❌ Реферальные бонусы закончились после 20 марта');
-      return { success: false, reason: 'period_ended' };
-    }
-    
+    if (now > eidDate) return { success: false, reason: 'period_ended' };
+    const users = getDB().collection('users');
     const user = await users.findOne({ userId: parseInt(userId) });
     if (!user) return { success: false, reason: 'user_not_found' };
-    
-    let finalXP = 0;
-    let multiplier = 1.0;
-    let todayCount = 0;
-    
+    let finalXP = 0, multiplier = 1.0, todayCount = 0;
     if (type === 'payment') {
-      // ✅ За ОПЛАТУ реферала - всегда 400 XP (БЕЗ множителей!)
       finalXP = 400;
-      console.log(`💰 Реферал ${referredUserId} оплатил подписку → +400 XP для реферера ${userId}`);
-      
     } else {
-      // ✅ За РЕГИСТРАЦИЮ (приглашение) - с множителями
       const dailyReferrals = user.dailyReferrals || {};
       todayCount = (dailyReferrals[todayDateStr] || 0) + 1;
-      
-      // Определяем множитель по количеству рефералов за сегодня
-      if (todayCount >= 50) {
-        multiplier = 2.0;
-      } else if (todayCount >= 20) {
-        multiplier = 1.6;
-      } else if (todayCount >= 5) {
-        multiplier = 1.3;
-      }
-      
-      const baseRegistrationXP = 100;
-      finalXP = Math.floor(baseRegistrationXP * multiplier);
-      
-      console.log(`👥 Новый реферал #${todayCount} сегодня → +${finalXP} XP (x${multiplier.toFixed(1)}) для реферера ${userId}`);
+      if (todayCount >= 50) multiplier = 2.0;
+      else if (todayCount >= 20) multiplier = 1.6;
+      else if (todayCount >= 5) multiplier = 1.3;
+      finalXP = Math.floor(100 * multiplier);
     }
-    
-    // ✅ Обновляем пользователя
-    const updateData = {
-      xp: (user.xp || 0) + finalXP,
-      updatedAt: new Date()
-    };
-    
-    // Только для регистрации увеличиваем счётчики
+    const updateData = { xp: (user.xp || 0) + finalXP, updatedAt: new Date() };
     if (type === 'registration') {
       updateData[`dailyReferrals.${todayDateStr}`] = todayCount;
       updateData.invitedCount = (user.invitedCount || 0) + 1;
     }
-    
-    await users.updateOne(
-      { userId: parseInt(userId) },
-      { $set: updateData }
-    );
-    
-    console.log(`✅ Реферер ${userId}: теперь ${updateData.xp} XP`);
-    
-    return { 
-      success: true, 
-      xp: finalXP, 
-      multiplier: type === 'payment' ? 1.0 : multiplier, 
-      todayCount: type === 'registration' ? todayCount : 0,
-      referredUserName,
-      type
-    };
-  } catch (error) {
-    console.error('❌ Error adding referral XP:', error);
-    return { success: false, reason: 'error' };
-  }
+    await users.updateOne({ userId: parseInt(userId) }, { $set: updateData });
+    return { success: true, xp: finalXP, multiplier: type === 'payment' ? 1.0 : multiplier, todayCount: type === 'registration' ? todayCount : 0, referredUserName, type };
+  } catch (error) { console.error('❌ addReferralXP:', error); return { success: false, reason: 'error' }; }
 }
 
-// =====================================================
-// ЭКСПОРТЫ (ТОЛЬКО ОДИН РАЗ!)
-// =====================================================
-
 export {
-  getOrCreateUser,
-  getUserById,
-  getUserByPromoCode,
-  incrementReferralCount,
-  updateUserProgress,
-  getUserFullData,
-  updateUserOnboarding,
-  checkPromoCode,
-  updatePaymentStatus,
-  approvePayment,
-  rejectPayment,
-  getUserAccess,
-  getPendingPayments,
-  checkDemoExpiration,
-  addUserXP,
-  getGlobalLeaderboard,
-  getUserRank,
-  getFriendsLeaderboard,
-  getCountries,
-  getCities,
-  getFilteredLeaderboard,
-  addReferralXP
+  getOrCreateUser, getUserById, getUserByPromoCode, incrementReferralCount,
+  updateUserProgress, getUserFullData, updateUserOnboarding, checkPromoCode,
+  updatePaymentStatus, approvePayment, rejectPayment, getUserAccess,
+  getPendingPayments, checkDemoExpiration, addUserXP, getGlobalLeaderboard,
+  getUserRank, getFriendsLeaderboard, getCountries, getCities,
+  getFilteredLeaderboard, addReferralXP
 };
