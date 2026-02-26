@@ -13,7 +13,6 @@ const XP_VALUES = {
 };
 
 // ─── ДОПУСТИМЫЕ XP ЗА КАТЕГОРИИ ЦЕЛЕЙ (v2) ───
-// Максимальное XP на категорию в день — защита от шаблонов с завышенным XP
 const GOAL_CATEGORY_MAX_XP = {
   prayer:    150,
   quran:     200,
@@ -22,6 +21,20 @@ const GOAL_CATEGORY_MAX_XP = {
   charity:   150,
   selfdev:   100,
 };
+
+/**
+ * #B3 FIX: Получить «сегодня» в таймзоне пользователя.
+ * Если timezone не задан — берём 'Asia/Almaty' (UTC+5, Казахстан).
+ * Если timezone невалиден — тоже фолбэк на 'Asia/Almaty'.
+ */
+function getTodayStr(timezone) {
+  const tz = timezone || 'Asia/Almaty';
+  try {
+    return new Date().toLocaleDateString('en-CA', { timeZone: tz });
+  } catch {
+    return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Almaty' });
+  }
+}
 
 async function generateUniquePromoCode(usersCollection) {
   for (let attempt = 0; attempt < 10; attempt++) {
@@ -82,11 +95,12 @@ async function getOrCreateUser(userId, username = null) {
       xp: 0,
       unlockedBadges: [],
       hasRedeemedReferral: false,
-      // ✅ НОВЫЕ ПОЛЯ — Мақсаттар v2
+      // ✅ ПОЛЯ Мақсаттар v2
       dailyGoalRecords: {},      // { '2026-03-01': [ DailyGoalRecord, ... ] }
       goalCustomItems: {},        // { prayer: [ CustomGoalItem, ... ] }
-      goalStreaks: {},             // { prayer: 3, quran: 5, ... }
-      earnedGoalXp: {},           // { '2026-03-01': { prayer: true, quran: true } } — защита
+      // FIX #B1: goalStreaks хранит объекты { current, longest, lastCompletedDate }
+      goalStreaks: {},             // { prayer: { current:3, longest:5, lastCompletedDate:'2026-03-01' }, ... }
+      earnedGoalXp: {},           // { '2026-03-01': { prayer: true, quran: true } }
       onboardingCompleted: false,
       createdAt: new Date(),
       updatedAt: new Date()
@@ -149,9 +163,10 @@ async function updateUserProgress(userId, progressData) {
     const oldUser = await usersCollection.findOne({ userId: parseInt(userId) });
     if (!oldUser) { console.error('❌ Пользователь не найден:', userId); return false; }
 
-    const now = new Date();
+    // FIX #B3: используем безопасную функцию getTodayStr
     const userTimezone = oldUser.location?.timezone || 'Asia/Almaty';
-    const todayDateStr = now.toLocaleDateString('en-CA', { timeZone: userTimezone });
+    const todayDateStr = getTodayStr(userTimezone);
+    const now = new Date();
 
     let xpToAdd = 0;
     const earnedTasksFromDB = oldUser.earnedTasks || {};
@@ -221,50 +236,44 @@ async function updateUserProgress(userId, progressData) {
       }
     }
 
-    // ─── ✅ XP за dailyGoalRecords (v2) — С ПОЛНОЙ ЗАЩИТОЙ В БЭКЕНДЕ ───
+    // ─── ✅ XP за dailyGoalRecords (v2) — ЕДИНСТВЕННОЕ место начисления ───
+    // FIX #B2: убрана дублирующая логика earnedGoalXp ниже — всё в одном месте
+    const mergedEarnedGoalXp = { ...(oldUser.earnedGoalXp || {}) };
     if (progressData.dailyGoalRecords) {
-      const oldRecords = oldUser.dailyGoalRecords || {};
-      const oldEarnedGoalXp = oldUser.earnedGoalXp || {};
-      const todayEarnedGoals = { ...(oldEarnedGoalXp[todayDateStr] || {}) };
+      const todayEarnedGoals = { ...(mergedEarnedGoalXp[todayDateStr] || {}) };
 
       const incomingToday = progressData.dailyGoalRecords[todayDateStr];
       if (Array.isArray(incomingToday)) {
         for (const record of incomingToday) {
           const { categoryId, completed, xpEarned } = record;
 
-          // ЗащИТА 1: категория уже зачтена сегодня
+          // Защита 1: категория уже зачтена сегодня
           if (todayEarnedGoals[categoryId]) {
             console.log(`🛡️ Блок: повторное начисление XP за ${categoryId} — уже зачтено сегодня`);
             continue;
           }
-
-          // ЗащИТА 2: начисляем XP только если completed === true
+          // Защита 2: только completed
           if (!completed) continue;
-
-          // ЗащИТА 3: проверяем maxXP по категории
+          // Защита 3: maxXP по категории
           const maxXp = GOAL_CATEGORY_MAX_XP[categoryId] || 100;
           const safeXp = Math.min(Math.max(parseInt(xpEarned) || 0, 0), maxXp);
-
           if (safeXp <= 0) continue;
 
-          // ЗащИТА 4: только сегодня можно получить XP
           const streakMultiplier = Math.min(1 + ((oldUser.currentStreak || 0) * 0.1), 3.0);
           const finalXp = Math.floor(safeXp * streakMultiplier);
-
           xpToAdd += finalXp;
-          todayEarnedGoals[categoryId] = true; // запоминаем в БД
+          todayEarnedGoals[categoryId] = true;
           console.log(`🎯 +${finalXp} XP за цель категории ${categoryId} (x${streakMultiplier.toFixed(2)})`);
         }
-
-        // Сохраняем earnedGoalXp обратно в БД
-        oldEarnedGoalXp[todayDateStr] = todayEarnedGoals;
       }
+      // Записываем обновлённый earnedGoalXp один раз
+      mergedEarnedGoalXp[todayDateStr] = todayEarnedGoals;
     }
 
     // ─── ОБНОВЛЕНИЕ СТРИКА ───
     const lastActiveDate = oldUser.lastActiveDate || '';
-    const yesterdayDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-    const yesterdayStr = yesterdayDate.toLocaleDateString('en-CA', { timeZone: userTimezone });
+    const yesterdayStr = new Date(now.getTime() - 86400000)
+      .toLocaleDateString('en-CA', { timeZone: userTimezone });
     let newStreak = oldUser.currentStreak || 0;
     const hasActivityToday = xpToAdd > 0;
     if (hasActivityToday) {
@@ -286,26 +295,8 @@ async function updateUserProgress(userId, progressData) {
     newEarnedTasks[todayDateStr] = todayEarned;
     updateFields.earnedTasks = newEarnedTasks;
 
-    // earnedGoalXp (новая система v2)
-    if (progressData.dailyGoalRecords) {
-      const oldEarnedGoalXp = oldUser.earnedGoalXp || {};
-      // Уже обновили выше — пишем в поле
-      // Копируем обновлённый объект
-      const mergedEarnedGoalXp = { ...oldEarnedGoalXp };
-      if (progressData.dailyGoalRecords[todayDateStr]) {
-        // todayEarnedGoals уже обновлён в цикле выше — восстанавливаем
-        const todayEarnedGoals = mergedEarnedGoalXp[todayDateStr] || {};
-        // Применяем начисленные категории
-        for (const record of (progressData.dailyGoalRecords[todayDateStr] || [])) {
-          if (record.completed && !todayEarnedGoals[record.categoryId]) {
-            const maxXp = GOAL_CATEGORY_MAX_XP[record.categoryId] || 100;
-            if (Math.min(Math.max(parseInt(record.xpEarned) || 0, 0), maxXp) > 0) {
-              todayEarnedGoals[record.categoryId] = true;
-            }
-          }
-        }
-        mergedEarnedGoalXp[todayDateStr] = todayEarnedGoals;
-      }
+    // FIX #B2: earnedGoalXp записывается ровно один раз — из mergedEarnedGoalXp выше
+    if (progressData.dailyGoalRecords !== undefined) {
       updateFields.earnedGoalXp = mergedEarnedGoalXp;
     }
 
@@ -317,7 +308,7 @@ async function updateUserProgress(userId, progressData) {
     if (shouldUpdate(progressData.preparationProgress)) updateFields.preparationProgress = progressData.preparationProgress;
     if (shouldUpdate(progressData.basicProgress)) updateFields.basicProgress = progressData.basicProgress;
 
-    // memorizedNames - только растёт
+    // memorizedNames — только растёт
     if (progressData.memorizedNames !== undefined) {
       const oldMemorized = oldUser.memorizedNames || [];
       const incoming = progressData.memorizedNames || [];
@@ -361,12 +352,14 @@ async function updateUserProgress(userId, progressData) {
     if (progressData.hasRedeemedReferral !== undefined) updateFields.hasRedeemedReferral = progressData.hasRedeemedReferral;
     if (progressData.unlockedBadges !== undefined) updateFields.unlockedBadges = progressData.unlockedBadges;
 
-    // ─── ✅ НОВЫЕ ПОЛЯ v2 ───
-    // dailyGoalRecords: принимаем всю историю, но ЗАПРЕЩАЕМ изменять уже зачтенные
+    // ─── НОВЫЕ ПОЛЯ v2 ───
+
+    // dailyGoalRecords: принимаем историю, защищаем зачтённые записи
     if (progressData.dailyGoalRecords !== undefined) {
       const oldRecords = oldUser.dailyGoalRecords || {};
       const incoming = progressData.dailyGoalRecords || {};
-      const earnedGoalXpNow = oldUser.earnedGoalXp || {};
+      // earnedGoalXp уже обновлён выше в mergedEarnedGoalXp
+      const earnedGoalXpNow = mergedEarnedGoalXp;
 
       const merged = { ...oldRecords };
       for (const dateKey in incoming) {
@@ -374,18 +367,15 @@ async function updateUserProgress(userId, progressData) {
         if (!Array.isArray(incomingArr)) continue;
 
         if (dateKey !== todayDateStr) {
-          // Прошлые дни — принимаем если не было в БД
+          // Прошлые дни — принимаем только если не было в БД
           if (!merged[dateKey]) merged[dateKey] = incomingArr;
         } else {
-          // Сегодня: защита выполненных записей
+          // Сегодня: защита записей, за которые уже начислен XP
           const earnedToday = earnedGoalXpNow[todayDateStr] || {};
           const existingToday = oldRecords[todayDateStr] || [];
-
           const protectedRecords = incomingArr.map(rec => {
-            // Если категория уже зачтена в БД — блокируем изменение
             if (earnedToday[rec.categoryId]) {
-              const dbRecord = existingToday.find(r => r.categoryId === rec.categoryId);
-              return dbRecord || rec;
+              return existingToday.find(r => r.categoryId === rec.categoryId) || rec;
             }
             return rec;
           });
@@ -395,20 +385,39 @@ async function updateUserProgress(userId, progressData) {
       updateFields.dailyGoalRecords = merged;
     }
 
-    // goalCustomItems — принимаем как есть (UI контролирует)
-    if (progressData.goalCustomItems !== undefined) updateFields.goalCustomItems = progressData.goalCustomItems || {};
+    // goalCustomItems — принимаем как есть
+    if (progressData.goalCustomItems !== undefined) {
+      updateFields.goalCustomItems = progressData.goalCustomItems || {};
+    }
 
-    // goalStreaks — обновляем только если значение растёт (защита от уменьшения)
+    // FIX #B1: goalStreaks — фронт присылает объекты { current, longest, lastCompletedDate }.
+    // Бэкенд НЕ перезаписывает streak если current фронта < current в БД (защита от откатов).
     if (progressData.goalStreaks !== undefined) {
       const oldStreaks = oldUser.goalStreaks || {};
       const incoming = progressData.goalStreaks || {};
       const mergedStreaks = { ...oldStreaks };
+
       for (const catId in incoming) {
-        const incomingVal = parseInt(incoming[catId]) || 0;
-        const oldVal = oldStreaks[catId] || 0;
-        // Число может обннуляться до 0 (streak reset), но не может прыгнуть больше чем +2 за раз
-        if (incomingVal <= oldVal + 1) mergedStreaks[catId] = incomingVal;
-        else mergedStreaks[catId] = oldVal; // блокируем невалидный прыжок
+        const inc = incoming[catId];
+        const old = oldStreaks[catId];
+
+        // Поддержка обоих форматов: число (legacy) и объект (v2)
+        const incCurrent  = (typeof inc === 'object' && inc !== null) ? (parseInt(inc.current)  || 0) : (parseInt(inc) || 0);
+        const incLongest  = (typeof inc === 'object' && inc !== null) ? (parseInt(inc.longest)  || 0) : incCurrent;
+        const incLastDate = (typeof inc === 'object' && inc !== null) ? (inc.lastCompletedDate  || '') : '';
+
+        const oldCurrent  = (typeof old === 'object' && old !== null) ? (parseInt(old.current)  || 0) : (parseInt(old) || 0);
+        const oldLongest  = (typeof old === 'object' && old !== null) ? (parseInt(old.longest)  || 0) : oldCurrent;
+
+        // Блокируем прыжок current больше чем +1 за раз (защита от накруток)
+        const safeCurrent = incCurrent <= oldCurrent + 1 ? incCurrent : oldCurrent;
+        const safeLongest = Math.max(oldLongest, safeCurrent, incLongest);
+
+        mergedStreaks[catId] = {
+          current: safeCurrent,
+          longest: safeLongest,
+          lastCompletedDate: incLastDate || ((typeof old === 'object' && old !== null) ? old.lastCompletedDate : '') || '',
+        };
       }
       updateFields.goalStreaks = mergedStreaks;
     }
@@ -416,7 +425,7 @@ async function updateUserProgress(userId, progressData) {
     // XP — считаем САМИ, не берём с фронта
     updateFields.xp = (oldUser.xp || 0) + xpToAdd;
 
-    // Стрик
+    // Глобальный стрик
     if (hasActivityToday) {
       updateFields.currentStreak = newStreak;
       updateFields.longestStreak = longestStreak;
@@ -485,7 +494,7 @@ async function getUserFullData(userId) {
       daysLeft: user.subscriptionExpiresAt
         ? Math.ceil((new Date(user.subscriptionExpiresAt) - new Date()) / (1000 * 60 * 60 * 24))
         : null,
-      // ✅ НОВЫЕ ПОЛЯ v2
+      // ✅ ПОЛЯ v2
       dailyGoalRecords: user.dailyGoalRecords || {},
       goalCustomItems: user.goalCustomItems || {},
       goalStreaks: user.goalStreaks || {},
@@ -674,7 +683,7 @@ async function checkAndUnlockBadges(userId) {
 async function getCountries() {
   try {
     const countries = await getDB().collection('users').distinct('location.country', { 'location.country': { $ne: null }, onboardingCompleted: true });
-    const norm = { 'Қазақстан': 'Kazakhstan', 'Ресей': 'Russia', 'Россия': 'Russia', 'Түркия': 'Turkey', 'Турция': 'Turkey', 'Өзбекстан': 'Uzbekistan', 'Узбекистан': 'Uzbekistan' };
+    const norm = { 'Қазақстан': 'Kazakhstan', 'Ресей': 'Russia', 'Россия': 'Russia', 'Түркия': 'Turkey', 'Турция': 'Turkey', 'Өзбекстан': 'Uzbekistan', 'Узбекістан': 'Uzbekistan', 'Узбекистан': 'Uzbekistan' };
     return [...new Set(countries.map(c => norm[c] || c).filter(c => c && c !== 'Unknown'))].sort();
   } catch (error) { return []; }
 }
@@ -703,11 +712,14 @@ async function getFilteredLeaderboard(options = {}) {
 async function addReferralXP(userId, type = 'registration', referredUserId = null, referredUserName = null) {
   try {
     const now = new Date();
-    const todayDateStr = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Almaty' });
+    // FIX #B3: используем getTodayStr для консистентности
+    const user0 = await getDB().collection('users').findOne({ userId: parseInt(userId) });
+    const refTz = user0?.location?.timezone || 'Asia/Almaty';
+    const todayDateStr = getTodayStr(refTz);
     const eidDate = new Date('2026-03-20T23:59:59+05:00');
     if (now > eidDate) return { success: false, reason: 'period_ended' };
     const users = getDB().collection('users');
-    const user = await users.findOne({ userId: parseInt(userId) });
+    const user = user0 || await users.findOne({ userId: parseInt(userId) });
     if (!user) return { success: false, reason: 'user_not_found' };
     let finalXP = 0, multiplier = 1.0, todayCount = 0;
     if (type === 'payment') {
