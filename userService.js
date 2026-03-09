@@ -101,6 +101,8 @@ async function getOrCreateUser(userId, username = null) {
       // FIX #B1: goalStreaks хранит объекты { current, longest, lastCompletedDate }
       goalStreaks: {},             // { prayer: { current:3, longest:5, lastCompletedDate:'2026-03-01' }, ... }
       earnedGoalXp: {},           // { '2026-03-01': { prayer: true, quran: true } }
+      tasbeehRecords: {},
+      earnedTasbeehXp: {},
       onboardingCompleted: false,
       createdAt: new Date(),
       updatedAt: new Date()
@@ -422,6 +424,44 @@ async function updateUserProgress(userId, progressData) {
       updateFields.goalStreaks = mergedStreaks;
     }
 
+    // ─── tasbeehRecords: сохранить и начислить XP за выполненные зікіры ───
+    if (progressData.tasbeehRecords !== undefined) {
+      const oldTasbeeh = oldUser.tasbeehRecords || {};
+      const incoming   = progressData.tasbeehRecords || {};
+      const earnedTasbeehXp = { ...(oldUser.earnedTasbeehXp || {}) };
+
+      const TASBEEH_XP = {
+        subhanallah: 33, alhamdulillah: 33, allahuakbar: 33,
+        astaghfirullah: 40, lailaha: 50, salavat: 50,
+      };
+
+      const merged = { ...oldTasbeeh };
+      for (const dateKey in incoming) {
+        const dayRecord = incoming[dateKey];
+        if (!dayRecord) continue;
+
+        merged[dateKey] = dayRecord;
+
+        if (dateKey === todayDateStr) {
+          const todayEarnedDhikrs = [...(earnedTasbeehXp[todayDateStr] || [])];
+          const completedIds = dayRecord.completedIds || [];
+
+          for (const dhikrId of completedIds) {
+            if (!todayEarnedDhikrs.includes(dhikrId)) {
+              const dhikrXp = TASBEEH_XP[dhikrId] || 30;
+              xpToAdd += dhikrXp;
+              todayEarnedDhikrs.push(dhikrId);
+              console.log(`📿 +${dhikrXp} XP за зікір ${dhikrId}`);
+            }
+          }
+          earnedTasbeehXp[todayDateStr] = todayEarnedDhikrs;
+        }
+      }
+
+      updateFields.tasbeehRecords   = merged;
+      updateFields.earnedTasbeehXp  = earnedTasbeehXp;
+    }
+
     // XP — считаем САМИ, не берём с фронта
     updateFields.xp = (oldUser.xp || 0) + xpToAdd;
 
@@ -498,6 +538,7 @@ async function getUserFullData(userId) {
       dailyGoalRecords: user.dailyGoalRecords || {},
       goalCustomItems: user.goalCustomItems || {},
       goalStreaks: user.goalStreaks || {},
+      tasbeehRecords: user.tasbeehRecords || {},
     };
   } catch (error) {
     console.error('❌ getUserFullData ошибка:', error);
