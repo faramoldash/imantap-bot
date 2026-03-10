@@ -432,7 +432,7 @@ async function updateUserProgress(userId, progressData) {
 
       const TASBEEH_XP = {
         subhanallah: 33, alhamdulillah: 33, allahuakbar: 33,
-        astaghfirullah: 40, lailaha: 50, salavat: 50,
+        astaghfirullah: 100, lailaha: 100, salavat: 100,
       };
 
       const merged = { ...oldTasbeeh };
