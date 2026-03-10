@@ -103,6 +103,7 @@ async function getOrCreateUser(userId, username = null) {
       earnedGoalXp: {},           // { '2026-03-01': { prayer: true, quran: true } }
       tasbeehRecords: {},
       earnedTasbeehXp: {},
+      tasbeehTotals: {},
       onboardingCompleted: false,
       createdAt: new Date(),
       updatedAt: new Date()
@@ -460,6 +461,19 @@ async function updateUserProgress(userId, progressData) {
 
       updateFields.tasbeehRecords   = merged;
       updateFields.earnedTasbeehXp  = earnedTasbeehXp;
+      if (progressData.tasbeehTotals) {
+        const oldTotals = oldUser.tasbeehTotals || {};
+        const incomingTotals = progressData.tasbeehTotals || {};
+        const mergedTotals = { ...oldTotals };
+        for (const dhikrId in incomingTotals) {
+          // берём максимум — защита от случайного уменьшения
+          mergedTotals[dhikrId] = Math.max(
+            oldTotals[dhikrId] || 0,
+            incomingTotals[dhikrId] || 0
+          );
+        }
+        updateFields.tasbeehTotals = mergedTotals;
+      }
     }
 
     // XP — считаем САМИ, не берём с фронта
@@ -539,6 +553,7 @@ async function getUserFullData(userId) {
       goalCustomItems: user.goalCustomItems || {},
       goalStreaks: user.goalStreaks || {},
       tasbeehRecords: user.tasbeehRecords || {},
+      tasbeehTotals: user.tasbeehTotals || {},
     };
   } catch (error) {
     console.error('❌ getUserFullData ошибка:', error);
