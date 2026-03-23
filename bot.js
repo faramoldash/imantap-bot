@@ -237,6 +237,61 @@ const RAMADAN_MESSAGES = {
   }
 };
 
+const SHAWWAL_MESSAGES = {
+  suhur: {
+    kk: (fajrTime, maghribTime) => `🌙 *Ауыз бекіту уақыты жақындады — ${fajrTime}*
+${maghribTime ? `🌆 Бүгінгі ауыз ашу уақыты: *${maghribTime}*` : ''}
+
+Шәууал оразасының ниеті:
+
+نَوَيْتُ أَنْ أَصُومَ غَدًا مِنْ شَهْرِ شَوَّالٍ سُنَّةً لِلَّهِ تَعَالَى
+
+*Оқылуы:* «Нәуәйту ән асумә ғадан мин шәһри Шәууәлин суннәтән лилләһи тәғәлә»
+
+*Мағынасы:* «Алланың ризалығы үшін Шәууал айының сүннет оразасын ұстауға ниет еттім»
+
+Алла Тағала қабыл етсін! 🤲`,
+    ru: (fajrTime, maghribTime) => `🌙 *Время сухура — ${fajrTime}*
+${maghribTime ? `🌆 Ифтар сегодня: *${maghribTime}*` : ''}
+
+Ният на пост Шавваля:
+
+نَوَيْتُ أَنْ أَصُومَ غَدًا مِنْ شَهْرِ شَوَّالٍ سُنَّةً لِلَّهِ تَعَالَى
+
+*Транскрипция:* «Науэйту ан асума гадан мин шахри Шавваль суннатан лиллахи таъаля»
+
+*Перевод:* «Я намереваюсь держать сунна-пост месяца Шавваль ради Аллаха»
+
+Пусть Аллах примет! 🤲`
+  },
+  iftar: {
+    kk: (maghribTime, fajrTime) => `🌆 *Ауыз ашатын уақыт — ${maghribTime}*
+${fajrTime ? `🌙 Ертеңгі ауыз бекіту уақыты: *${fajrTime}*` : ''}
+
+Ауыз ашқанда айтылатын дұға:
+
+اللَّهُمَّ لَكَ صُمْتُ وَ بِكَ آمَنْتُ وَ عَلَيْكَ تَوَكَّلْتُ وَ عَلَى رِزْقِكَ أَفْطَرْتُ
+
+*Оқылуы:* «Аллаһумма ләкә сумту уә бикә әәмәнту уә 'аләйкә тәуәккәлту уә 'ала ризқикә әфтарту»
+
+*Мағынасы:* «Алла Тағалам! Сенің ризалығың үшін ораза ұстадым. Саған иман етіп, саған тәуекел жасадым. Сенің берген ризығыңмен аузымды аштым»
+
+Шәууал оразаңыз қабыл болсын! 🤲`,
+    ru: (maghribTime, fajrTime) => `🌆 *Время ифтара — ${maghribTime}*
+${fajrTime ? `🌙 Завтра сухур: *${fajrTime}*` : ''}
+
+Дуа при разговении:
+
+اللَّهُمَّ لَكَ صُمْتُ وَ بِكَ آمَنْتُ وَ عَلَيْكَ تَوَكَّلْتُ وَ عَلَى رِزْقِكَ أَفْطَرْتُ
+
+*Транскрипция:* «Аллахумма ляка сумту уа бика ааманту уа 'аляйка тауаккяльту уа 'аля ризкыка афтарту»
+
+*Перевод:* «О Аллах! Я постился ради Тебя, уверовал в Тебя, положился на Тебя и разговелся тем, что Ты даровал»
+
+Пусть Аллах примет ваш пост Шавваля! 🤲`
+  }
+};
+
 // ✅ Функция отправки персонализированных уведомлений (с timezone каждого пользователя)
 async function sendPersonalizedRamadanReminder(type) {
   try {
@@ -279,50 +334,72 @@ async function sendPersonalizedRamadanReminder(type) {
         
         let shouldSend = false;
         let prayerTime = '';
+        let iftarTime = '';   // ← добавить
+        let suhurTime = '';
         
-        // Проверяем сухур (за 15 минут до Fajr)
         if (type === 'suhur' && prayerTimes.fajr) {
           const reminderTime = calculateReminderTime(prayerTimes.fajr, minutesBefore);
-          
           if (reminderTime.hour === currentHour && reminderTime.minute === currentMinute) {
             shouldSend = true;
-            prayerTime = prayerTimes.fajr;
+            prayerTime = prayerTimes.fajr;       // время бекіту (fajr)
+            iftarTime = prayerTimes.maghrib;     // время ауыз ашу (для инфо)
           }
         }
-        
-        // Проверяем ифтар (за 15 минут до Maghrib)
+
         if (type === 'iftar' && prayerTimes.maghrib) {
           const reminderTime = calculateReminderTime(prayerTimes.maghrib, minutesBefore);
-          
           if (reminderTime.hour === currentHour && reminderTime.minute === currentMinute) {
             shouldSend = true;
-            prayerTime = prayerTimes.maghrib;
+            prayerTime = prayerTimes.maghrib;    // время ауыз ашу (maghrib)
+            suhurTime = prayerTimes.fajr;        // время бекіту (для инфо)
           }
         }
         
         if (shouldSend) {
-          const message = RAMADAN_MESSAGES[type][lang].replace('{PRAYER_TIME}', prayerTime);
-          
+          // Определяем период
+          const SHAWWAL_START = '2026-03-21';
+          const SHAWWAL_END   = '2026-04-19';
+          const RAMADAN_START = '2026-02-19'; // ваша дата
+          const EID_DATE      = '2026-03-20';
+          const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: userTimezone });
+
+          const isRamadan = todayStr >= RAMADAN_START && todayStr < EID_DATE;
+          const isShawwal = todayStr >= SHAWWAL_START && todayStr <= SHAWWAL_END;
+          const shawwalDone = (user.shawwalFasts || 0) >= 6;
+
+          // Не сезон или Шаввал уже выполнен — пропускаем
+          if (!isRamadan && !isShawwal) return;
+          if (isShawwal && shawwalDone) return;
+
+          // Формируем сообщение
+          let message;
+          if (isShawwal) {
+            if (type === 'suhur') {
+              message = SHAWWAL_MESSAGES.suhur[lang](prayerTime, iftarTime);
+            } else {
+              message = SHAWWAL_MESSAGES.iftar[lang](prayerTime, suhurTime);
+            }
+          } else {
+            message = RAMADAN_MESSAGES[type][lang].replace('{PRAYER_TIME}', prayerTime);
+          }
+
+          // Кнопка
+          const inlineKeyboard = (isShawwal && type === 'iftar')
+            ? { inline_keyboard: [[{ text: lang === 'kk' ? '✅ Ораза ұстадым' : '✅ Я держал пост', callback_data: 'shawwal_fast_done' }]] }
+            : { inline_keyboard: [[{ text: lang === 'kk' ? '✅ Жасалды' : '✅ Готово', callback_data: `ramadan_${type}_done` }]] };
+
           try {
             await bot.sendMessage(user.userId, message, {
               parse_mode: 'Markdown',
-              reply_markup: {
-                inline_keyboard: [[
-                  {
-                    text: lang === 'kk' ? '✅ Жасалды' : '✅ Готово',
-                    callback_data: `ramadan_${type}_done`
-                  }
-                ]]
-              }
+              reply_markup: inlineKeyboard
             });
 
-            console.log(`📨 ${type} → User ${user.userId} (${userTimezone}, ${currentHour}:${currentMinute.toString().padStart(2, '0')})`);
+            console.log(`📨 ${isShawwal ? '🌙Shawwal' : '🕌Ramadan'} ${type} → User ${user.userId} (${userTimezone}, ${currentHour}:${currentMinute.toString().padStart(2, '0')})`);
             sentCount++;
             await new Promise(resolve => setTimeout(resolve, 100));
 
           } catch (sendError) {
             if (sendError?.response?.body?.error_code === 403) {
-              // Пользователь заблокировал бота — отключаем
               await users.updateOne(
                 { userId: user.userId },
                 { $set: { 'notificationSettings.ramadanReminders': false } }
@@ -4285,6 +4362,102 @@ const server = http.createServer(async (req, res) => {
         }
       });
       
+      return;
+    }
+
+    // =====================================================
+    // 🌙 SHAWWAL — отметить пост
+    // =====================================================
+    if (req.method === 'POST' && req.url === '/shawwal-fast') {
+      let body = '';
+      req.on('data', chunk => body += chunk);
+      req.on('end', async () => {
+        try {
+          const { userId } = JSON.parse(body);
+          if (!userId) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'userId required' }));
+          }
+
+          const db = getDB();
+          const users = db.collection('users');
+          const user = await users.findOne({ userId: Number(userId) });
+
+          if (!user) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'User not found' }));
+          }
+
+          const SHAWWAL_START = '2026-03-21';
+          const SHAWWAL_END   = '2026-04-19';
+
+          // Получаем сегодняшнюю дату в timezone пользователя
+          const userTZ = user.location?.timezone || 'Asia/Almaty';
+          const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: userTZ });
+
+          // Проверяем период Шаввала
+          if (todayStr < SHAWWAL_START || todayStr > SHAWWAL_END) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'Not shawwal period' }));
+          }
+
+          const currentFasts = user.shawwalFasts || 0;
+
+          // Проверяем уже отмечал сегодня?
+          const shawwalDates = user.shawwalDates || [];
+          if (shawwalDates.includes(todayStr)) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ 
+              success: true, 
+              shawwalFasts: currentFasts,
+              alreadyMarked: true 
+            }));
+          }
+
+          // Не более 6
+          if (currentFasts >= 6) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ success: true, shawwalFasts: 6, completed: true }));
+          }
+
+          const newCount = currentFasts + 1;
+          await users.updateOne(
+            { userId: Number(userId) },
+            { 
+              $set: { shawwalFasts: newCount },
+              $push: { shawwalDates: todayStr }
+            }
+          );
+
+          console.log(`🌙 Shawwal fast: User ${userId} → ${newCount}/6`);
+
+          // 🎉 Если выполнил все 6 — отправляем поздравление
+          if (newCount === 6) {
+            const lang = user.language || 'kk';
+            const congratsMsg = lang === 'kk'
+              ? `🎉 *МашаАллаһ! Шаууал оразасын аяқтадыңыз!*\n\n6 күн ораза ұстадыңыз — бұл 1 жылдық оразаға тең сауап! 🤲\n\nАлла Тағала барлық амалдарыңызды қабыл етсін! 🌙`
+              : `🎉 *МашаАллаh! Вы завершили пост Шавваля!*\n\n6 дней поста — это награда, равная целому году поста! 🤲\n\nПусть Аллах примет все ваши деяния! 🌙`;
+
+            try {
+              await bot.sendMessage(user.userId, congratsMsg, { parse_mode: 'Markdown' });
+            } catch (e) {
+              console.error('Ошибка поздравления:', e.message);
+            }
+          }
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ 
+            success: true, 
+            shawwalFasts: newCount,
+            completed: newCount === 6
+          }));
+
+        } catch (e) {
+          console.error('Shawwal fast error:', e);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Server error' }));
+        }
+      });
       return;
     }
 
