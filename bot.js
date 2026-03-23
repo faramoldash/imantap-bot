@@ -4429,8 +4429,7 @@ const server = http.createServer(async (req, res) => {
       req.on('end', async () => {
         try {
           const { userId, date } = JSON.parse(body);
-          // date — опциональная дата в формате 'YYYY-MM-DD'
-          const todayStr = date || new Date().toLocaleDateString('en-CA', { timeZone: userTZ });
+
           if (!userId) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ error: 'userId required' }));
@@ -4445,38 +4444,46 @@ const server = http.createServer(async (req, res) => {
             return res.end(JSON.stringify({ error: 'User not found' }));
           }
 
+          // ✅ userTZ объявляем ДО использования
+          const userTZ = user.location?.timezone || 'Asia/Almaty';
+          const todayStr = date || new Date().toLocaleDateString('en-CA', { timeZone: userTZ });
+
           const SHAWWAL_START = '2026-03-21';
           const SHAWWAL_END   = '2026-04-19';
 
-          // Получаем сегодняшнюю дату в timezone пользователя
-          const userTZ = user.location?.timezone || 'Asia/Almaty';
-
-          // Проверяем период Шаввала
           if (todayStr < SHAWWAL_START || todayStr > SHAWWAL_END) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ error: 'Not shawwal period' }));
           }
 
+          const shawwalDates = user.shawwalDates || [];
           const currentFasts = user.shawwalFasts || 0;
 
-          // Проверяем уже отмечал сегодня?
-          const shawwalDates = user.shawwalDates || [];
+          // ✅ Уже отмечен
           if (shawwalDates.includes(todayStr)) {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ 
               success: true, 
+              alreadyMarked: true,
               shawwalFasts: currentFasts,
-              alreadyMarked: true 
+              shawwalDates: shawwalDates
             }));
           }
 
-          // Не более 6
+          // ✅ Уже 6
           if (currentFasts >= 6) {
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ success: true, shawwalFasts: 6, completed: true }));
+            return res.end(JSON.stringify({ 
+              success: true, 
+              shawwalFasts: 6, 
+              shawwalDates: shawwalDates,
+              completed: true 
+            }));
           }
 
           const newCount = currentFasts + 1;
+          const newDates = [...shawwalDates, todayStr];
+
           await users.updateOne(
             { userId: Number(userId) },
             { 
@@ -4485,17 +4492,14 @@ const server = http.createServer(async (req, res) => {
               $push: { shawwalDates: todayStr }
             }
           );
-          console.log(`⭐ +60 XP за Шаввал ораза → User ${userId} (${newCount}/6)`);
 
-          console.log(`🌙 Shawwal fast: User ${userId} → ${newCount}/6`);
+          console.log(`⭐ +60 XP Shawwal → User ${userId} (${newCount}/6) [${todayStr}]`);
 
-          // 🎉 Если выполнил все 6 — отправляем поздравление
           if (newCount === 6) {
             const lang = user.language || 'kk';
             const congratsMsg = lang === 'kk'
-              ? `🎉 *МашаАллаһ! Шаууал оразасын аяқтадыңыз!*\n\n6 күн ораза ұстадыңыз — бұл 1 жылдық оразаға тең сауап! 🤲\n\nАлла Тағала барлық амалдарыңызды қабыл етсін! 🌙`
-              : `🎉 *МашаАллаh! Вы завершили пост Шавваля!*\n\n6 дней поста — это награда, равная целому году поста! 🤲\n\nПусть Аллах примет все ваши деяния! 🌙`;
-
+              ? `🎉 *МашаАллаһ! Шәууал оразасын аяқтадыңыз!*\n\n6 күн ораза ұстадыңыз — бұл 1 жылдық оразаға тең сауап! 🤲\n\nАлла Тағала барлық амалдарыңызды қабыл етсін! 🌙`
+              : `🎉 *МашаАллаh! Вы завершили пост Шавваля!*\n\n6 дней поста — награда, равная году поста! 🤲\n\nПусть Аллах примет все ваши деяния! 🌙`;
             try {
               await bot.sendMessage(user.userId, congratsMsg, { parse_mode: 'Markdown' });
             } catch (e) {
@@ -4503,10 +4507,13 @@ const server = http.createServer(async (req, res) => {
             }
           }
 
+          // ✅ Возвращаем shawwalDates для синхронизации фронта
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ 
             success: true, 
+            alreadyMarked: false,
             shawwalFasts: newCount,
+            shawwalDates: newDates,
             completed: newCount === 6
           }));
 
