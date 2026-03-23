@@ -928,6 +928,61 @@ bot.on('callback_query', async (query) => {
     await showPayment(chatId, userId, price, hasDiscount);
     return;
   }
+  
+  // ==========================================
+  // 🌙 Шаввал — отметить пост
+  // ==========================================
+  if (data === 'shawwal_fast_done') {
+    try {
+      const db = getDB();
+      const users = db.collection('users');
+      const user = await users.findOne({ userId });
+
+      const userTZ = user?.location?.timezone || 'Asia/Almaty';
+      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: userTZ });
+      const shawwalDates = user?.shawwalDates || [];
+      const lang = user?.language || 'kk';
+
+      if (shawwalDates.includes(todayStr)) {
+        await bot.answerCallbackQuery(query.id, {
+          text: lang === 'kk' ? 'Бүгін белгіленді ✅' : 'Уже отмечено сегодня ✅',
+          show_alert: false
+        });
+        return;
+      }
+
+      const newCount = Math.min((user?.shawwalFasts || 0) + 1, 6);
+
+      await users.updateOne(
+        { userId },
+        {
+          $set: { shawwalFasts: newCount },
+          $inc: { xp: 60 },
+          $push: { shawwalDates: todayStr }
+        }
+      );
+
+      console.log(`🌙 +60 XP Shawwal fast: User ${userId} → ${newCount}/6`);
+
+      await bot.answerCallbackQuery(query.id, {
+        text: lang === 'kk' ? `✅ Белгіленді! ${newCount}/6 (+60 XP)` : `✅ Отмечено! ${newCount}/6 (+60 XP)`,
+        show_alert: false
+      });
+
+      // 🎉 Поздравление если все 6 выполнены
+      if (newCount === 6) {
+        const msg = lang === 'kk'
+          ? `🎉 *МашаАллаһ! Шаууал оразасын аяқтадыңыз!*\n\n6 күн ораза ұстадыңыз — бұл толық жыл оразасына тең сауап! 🤲\n\nАлла Тағала барлық амалдарыңызды қабыл етсін! 🌙`
+          : `🎉 *МашаАллаh! Вы завершили пост Шавваля!*\n\n6 дней поста — награда, равная году поста! 🤲\n\nПусть Аллах примет все ваши деяния! 🌙`;
+        await bot.sendMessage(userId, msg, { parse_mode: 'Markdown' });
+      }
+
+    } catch (error) {
+      console.error('❌ shawwal_fast_done ошибка:', error);
+      await bot.answerCallbackQuery(query.id, { text: '❌ Қате', show_alert: true });
+    }
+    return;
+  }
 
   // ==========================================
   // Проверка прав для админских действий
@@ -4373,7 +4428,9 @@ const server = http.createServer(async (req, res) => {
       req.on('data', chunk => body += chunk);
       req.on('end', async () => {
         try {
-          const { userId } = JSON.parse(body);
+          const { userId, date } = JSON.parse(body);
+          // date — опциональная дата в формате 'YYYY-MM-DD'
+          const todayStr = date || new Date().toLocaleDateString('en-CA', { timeZone: userTZ });
           if (!userId) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ error: 'userId required' }));
@@ -4393,7 +4450,6 @@ const server = http.createServer(async (req, res) => {
 
           // Получаем сегодняшнюю дату в timezone пользователя
           const userTZ = user.location?.timezone || 'Asia/Almaty';
-          const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: userTZ });
 
           // Проверяем период Шаввала
           if (todayStr < SHAWWAL_START || todayStr > SHAWWAL_END) {
@@ -4425,9 +4481,11 @@ const server = http.createServer(async (req, res) => {
             { userId: Number(userId) },
             { 
               $set: { shawwalFasts: newCount },
+              $inc: { xp: 60 },
               $push: { shawwalDates: todayStr }
             }
           );
+          console.log(`⭐ +60 XP за Шаввал ораза → User ${userId} (${newCount}/6)`);
 
           console.log(`🌙 Shawwal fast: User ${userId} → ${newCount}/6`);
 
