@@ -554,9 +554,12 @@ async function getUserFullData(userId) {
       goalStreaks: user.goalStreaks || {},
       tasbeehRecords: user.tasbeehRecords || {},
       tasbeehTotals: user.tasbeehTotals || {},
+      // ✅ Намаз уақыттары
+      prayerTimes: user.prayerTimes || null,
       // ✅ Шаввал
       shawwalFasts: user.shawwalFasts || 0,
       shawwalDates: user.shawwalDates || [],
+
     };
   } catch (error) {
     console.error('❌ getUserFullData ошибка:', error);
