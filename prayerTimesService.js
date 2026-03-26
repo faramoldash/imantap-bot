@@ -212,9 +212,11 @@ export async function updateUserPrayerTimes(userId) {
     let prayerTimes = null;
     const hasCoords = user.location?.latitude && user.location?.longitude;
     const isKazakhstan = /kazakh|казах|kz/i.test(user.location?.country || '');
+    // По умолчанию ҚМДБ (muftyat), пользователь может переключить на aladhan
+    const useMuftyat = isKazakhstan && user.prayerTimeSource !== 'aladhan';
 
-    // ✅ ПРИОРИТЕТ 1: Координаты + Казахстан → Муфтият KZ (официальный источник)
-    if (hasCoords && isKazakhstan) {
+    // ✅ ПРИОРИТЕТ 1: Координаты + Казахстан + ҚМДБ → Муфтият KZ (официальный источник)
+    if (hasCoords && useMuftyat) {
       prayerTimes = await getPrayerTimesByMuftyat(
         user.location.latitude,
         user.location.longitude,
@@ -228,7 +230,7 @@ export async function updateUserPrayerTimes(userId) {
       }
     }
 
-    // ✅ ПРИОРИТЕТ 2: Координаты (Aladhan) — для не-KZ или fallback
+    // ✅ ПРИОРИТЕТ 2: Координаты (Aladhan) — для не-KZ, при выборе Aladhan или fallback
     if (!prayerTimes && hasCoords) {
       prayerTimes = await getPrayerTimesByCoordinates(
         user.location.latitude,

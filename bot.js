@@ -781,23 +781,28 @@ bot.on('callback_query', async (query) => {
       });
       
       // Обновляем сообщение
-      const prayerTimesInfo = user.prayerTimes 
+      const prayerTimesInfo = user.prayerTimes
         ? `✅ *Намаз уақыттары:*\n🌅 Таң: ${user.prayerTimes.fajr}\n🌆 Ақшам: ${user.prayerTimes.maghrib}`
         : '⚠️ Намаз уақыттары белгіленбеген';
-      
-      const updatedMessage = `⚙️ *Сіздің баптауларыңыз:*\n\n📍 *Қала:* ${user.location?.city || 'Белгісіз'}\n\n${prayerTimesInfo}\n\n🔔 *Хабарландырулар:* ${newValue ? '✅ Қосулы' : '❌ Өшірулі'}`;
-      
+
+      const isKZnotif = /kazakh|казах|kz/i.test(user.location?.country || '');
+      const sourceLabelNotif = !isKZnotif ? '' : (user.prayerTimeSource === 'aladhan' ? '\n🌍 *Намаз есебі:* Халықаралық' : '\n🕌 *Намаз есебі:* ҚМДБ (ресми)');
+      const updatedMessage = `⚙️ *Сіздің баптауларыңыз:*\n\n📍 *Қала:* ${user.location?.city || 'Белгісіз'}\n\n${prayerTimesInfo}${sourceLabelNotif}\n\n🔔 *Хабарландырулар:* ${newValue ? '✅ Қосулы' : '❌ Өшірулі'}`;
+
+      const notifKeyboard = [
+        [{ text: '📍 Қаланы өзгерту', callback_data: 'change_city' }],
+        [{ text: newValue ? '🔕 Хабарландыруды өшіру' : '🔔 Хабарландыруды қосу', callback_data: 'toggle_notifications' }],
+        [{ text: '🔄 Уақытты жаңарту', callback_data: 'update_prayer_times' }]
+      ];
+      if (isKZnotif) {
+        notifKeyboard.push([{ text: user.prayerTimeSource === 'aladhan' ? '🕌 ҚМДБ есепке ауысу' : '🌍 Халықаралық есепке ауысу', callback_data: 'toggle_prayer_source' }]);
+      }
+
       await bot.editMessageText(updatedMessage, {
         chat_id: chatId,
         message_id: messageId,
         parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '📍 Қаланы өзгерту', callback_data: 'change_city' }],
-            [{ text: newValue ? '🔕 Хабарландыруды өшіру' : '🔔 Хабарландыруды қосу', callback_data: 'toggle_notifications' }],
-            [{ text: '🔄 Уақытты жаңарту', callback_data: 'update_prayer_times' }]
-          ]
-        }
+        reply_markup: { inline_keyboard: notifKeyboard }
       });
     } catch (error) {
       console.error('toggle_notifications ошибка:', error);
@@ -825,6 +830,54 @@ bot.on('callback_query', async (query) => {
       }
     } catch (error) {
       console.error('update_prayer_times ошибка:', error);
+      await bot.answerCallbackQuery(query.id, { text: '❌ Қате', show_alert: true });
+    }
+    return;
+  }
+
+  // 🕌 НАСТРОЙКИ - Переключение источника намазов (ҚМДБ ↔ Aladhan)
+  if (data === 'toggle_prayer_source') {
+    try {
+      const user = await getUserById(userId);
+      const currentSource = user.prayerTimeSource || 'muftyat';
+      const newSource = currentSource === 'muftyat' ? 'aladhan' : 'muftyat';
+
+      const db = getDB();
+      await db.collection('users').updateOne(
+        { userId },
+        { $set: { prayerTimeSource: newSource, updatedAt: new Date() } }
+      );
+
+      await updateUserPrayerTimes(userId);
+      const updatedUser = await getUserById(userId);
+
+      const sourceLabel = newSource === 'muftyat' ? '🕌 ҚМДБ (ресми)' : '🌍 Халықаралық (Aladhan)';
+      await bot.answerCallbackQuery(query.id, {
+        text: `✅ Есептеу: ${sourceLabel}\n🌅 ${updatedUser.prayerTimes?.fajr}\n🌆 ${updatedUser.prayerTimes?.maghrib}`,
+        show_alert: true
+      });
+
+      const prayerTimesInfo = updatedUser.prayerTimes
+        ? `✅ *Намаз уақыттары:*\n🌅 Таң: ${updatedUser.prayerTimes.fajr}\n🌆 Ақшам: ${updatedUser.prayerTimes.maghrib}\n\n📅 Жаңартылды: ${new Date(updatedUser.prayerTimes.lastUpdated).toLocaleDateString('kk-KZ')}`
+        : '⚠️ Намаз уақыттары белгіленбеген';
+      const newSourceLabel = newSource === 'muftyat' ? '🕌 ҚМДБ (ресми)' : '🌍 Халықаралық';
+      const message = `⚙️ *Сіздің баптауларыңыз:*\n\n📍 *Қала:* ${updatedUser.location?.city || 'Белгісіз'}\n🌍 *Ел:* ${updatedUser.location?.country || 'Белгісіз'}\n\n${prayerTimesInfo}\n\n🕌 *Намаз есебі:* ${newSourceLabel}\n\n🔔 *Хабарландырулар:*\n${updatedUser.notificationSettings?.ramadanReminders !== false ? '✅ Қосулы' : '❌ Өшірулі'}\n\nӨзгерту үшін төмендегі батырмаларды басыңыз:`;
+
+      await bot.editMessageText(message, {
+        chat_id: chatId,
+        message_id: query.message.message_id,
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '📍 Қаланы өзгерту', callback_data: 'change_city' }],
+            [{ text: updatedUser.notificationSettings?.ramadanReminders !== false ? '🔕 Хабарландыруды өшіру' : '🔔 Хабарландыруды қосу', callback_data: 'toggle_notifications' }],
+            [{ text: '🔄 Уақытты жаңарту', callback_data: 'update_prayer_times' }],
+            [{ text: newSource === 'muftyat' ? '🌍 Халықаралық есепке ауысу' : '🕌 ҚМДБ есепке ауысу', callback_data: 'toggle_prayer_source' }]
+          ]
+        }
+      });
+    } catch (error) {
+      console.error('toggle_prayer_source ошибка:', error);
       await bot.answerCallbackQuery(query.id, { text: '❌ Қате', show_alert: true });
     }
     return;
@@ -1653,21 +1706,26 @@ bot.on('message', async (msg) => {
         return;
       }
       
-      const prayerTimesInfo = user.prayerTimes 
+      const prayerTimesInfo = user.prayerTimes
         ? `✅ *Намаз уақыттары:*\n🌅 Таң: ${user.prayerTimes.fajr}\n🌆 Ақшам: ${user.prayerTimes.maghrib}\n\n📅 Жаңартылды: ${new Date(user.prayerTimes.lastUpdated).toLocaleDateString('kk-KZ')}`
         : '⚠️ Намаз уақыттары белгіленбеген';
-      
-      const message = `⚙️ *Сіздің баптауларыңыз:*\n\n📍 *Қала:* ${user.location?.city || 'Белгісіз'}\n🌍 *Ел:* ${user.location?.country || 'Белгісіз'}\n\n${prayerTimesInfo}\n\n🔔 *Хабарландырулар:*\n${user.notificationSettings?.ramadanReminders !== false ? '✅ Қосулы' : '❌ Өшірулі'}\n\nӨзгерту үшін төмендегі батырмаларды басыңыз:`;
-      
+
+      const isKZ = /kazakh|казах|kz/i.test(user.location?.country || '');
+      const sourceLabel = !isKZ ? '' : (user.prayerTimeSource === 'aladhan' ? '\n🌍 *Намаз есебі:* Халықаралық' : '\n🕌 *Намаз есебі:* ҚМДБ (ресми)');
+      const message = `⚙️ *Сіздің баптауларыңыз:*\n\n📍 *Қала:* ${user.location?.city || 'Белгісіз'}\n🌍 *Ел:* ${user.location?.country || 'Белгісіз'}\n\n${prayerTimesInfo}${sourceLabel}\n\n🔔 *Хабарландырулар:*\n${user.notificationSettings?.ramadanReminders !== false ? '✅ Қосулы' : '❌ Өшірулі'}\n\nӨзгерту үшін төмендегі батырмаларды басыңыз:`;
+
+      const inlineKeyboard = [
+        [{ text: '📍 Қаланы өзгерту', callback_data: 'change_city' }],
+        [{ text: user.notificationSettings?.ramadanReminders !== false ? '🔕 Хабарландыруды өшіру' : '🔔 Хабарландыруды қосу', callback_data: 'toggle_notifications' }],
+        [{ text: '🔄 Уақытты жаңарту', callback_data: 'update_prayer_times' }]
+      ];
+      if (isKZ) {
+        inlineKeyboard.push([{ text: user.prayerTimeSource === 'aladhan' ? '🕌 ҚМДБ есепке ауысу' : '🌍 Халықаралық есепке ауысу', callback_data: 'toggle_prayer_source' }]);
+      }
+
       bot.sendMessage(chatId, message, {
         parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '📍 Қаланы өзгерту', callback_data: 'change_city' }],
-            [{ text: user.notificationSettings?.ramadanReminders !== false ? '🔕 Хабарландыруды өшіру' : '🔔 Хабарландыруды қосу', callback_data: 'toggle_notifications' }],
-            [{ text: '🔄 Уақытты жаңарту', callback_data: 'update_prayer_times' }]
-          ]
-        }
+        reply_markup: { inline_keyboard: inlineKeyboard }
       });
     } catch (error) {
       console.error('settings ошибка:', error);
