@@ -3,6 +3,45 @@ import fetch from 'node-fetch';
 import { getDB } from './db.js';
 
 /**
+ * Найти ближайший город из базы Муфтията по имени города пользователя
+ * Использует search-параметр чтобы не грузить все 5695 городов
+ */
+async function findNearestMuftyatCity(latitude, longitude, cityName = '') {
+  const candidates = [];
+
+  // Ищем по имени города если есть — так точнее
+  if (cityName) {
+    const res = await fetch(`https://api.muftyat.kz/cities/?search=${encodeURIComponent(cityName)}`);
+    const data = await res.json();
+    const results = Array.isArray(data.results) ? data.results : (Array.isArray(data) ? data : []);
+    candidates.push(...results);
+  }
+
+  // Если по имени ничего — берём первую страницу (ближайший по координатам)
+  if (candidates.length === 0) {
+    const res = await fetch('https://api.muftyat.kz/cities/');
+    const data = await res.json();
+    const results = Array.isArray(data.results) ? data.results : (Array.isArray(data) ? data : []);
+    candidates.push(...results);
+  }
+
+  let nearest = null;
+  let minDist = Infinity;
+
+  for (const city of candidates) {
+    const dlat = parseFloat(city.lat) - latitude;
+    const dlng = parseFloat(city.lng) - longitude;
+    const dist = dlat * dlat + dlng * dlng;
+    if (dist < minDist) {
+      minDist = dist;
+      nearest = city;
+    }
+  }
+
+  return nearest;
+}
+
+/**
  * Получить дату в нужном timezone в формате DD-MM-YYYY для Aladhan API
  * Сервер Railway = UTC. Без этого API вернёт времена для неправильного дня.
  */
@@ -15,6 +54,62 @@ function getDateForTimezone(timezone = 'Asia/Almaty') {
   }); // → "21/02/2026"
   const [day, month, year] = userDate.split('/');
   return `${day}-${month}-${year}`; // → "21-02-2026" (формат Aladhan API)
+}
+
+/**
+ * Получить текущий год в timezone пользователя
+ */
+function getYearForTimezone(timezone = 'Asia/Almaty') {
+  return new Date().toLocaleDateString('en-CA', { timeZone: timezone }).split('-')[0];
+}
+
+/**
+ * Получить сегодняшнюю дату в формате YYYY-MM-DD для Muftyat API
+ */
+function getTodayISOForTimezone(timezone = 'Asia/Almaty') {
+  return new Date().toLocaleDateString('en-CA', { timeZone: timezone }); // → "2026-03-26"
+}
+
+/**
+ * Получить времена намазов через официальный API Муфтията Казахстана
+ * Используется для пользователей из Казахстана — самый точный источник
+ */
+export async function getPrayerTimesByMuftyat(latitude, longitude, timezone = 'Asia/Almaty', cityName = '') {
+  try {
+    const year = getYearForTimezone(timezone);
+    const todayStr = getTodayISOForTimezone(timezone);
+
+    // Находим ближайший город из БД Муфтията (API требует точных координат)
+    const nearestCity = await findNearestMuftyatCity(latitude, longitude, cityName);
+    if (!nearestCity) return null;
+
+    const lat = nearestCity.lat;
+    const lng = nearestCity.lng;
+
+    const url = `https://api.muftyat.kz/prayer-times/${year}/${lat}/${lng}`;
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (!data.result || !Array.isArray(data.result)) return null;
+
+    const today = data.result.find(d => d.Date === todayStr);
+    if (!today) return null;
+
+    return {
+      fajr: today.fajr,
+      sunrise: today.sunrise,
+      dhuhr: today.dhuhr,
+      asr: today.asr,
+      maghrib: today.maghrib,
+      isha: today.isha,
+      date: todayStr,
+      lastUpdated: new Date(),
+      source: 'muftyat'
+    };
+  } catch (error) {
+    console.error('❌ Ошибка получения намазов (Муфтият KZ):', error);
+    return null;
+  }
 }
 
 /**
@@ -115,18 +210,35 @@ export async function updateUserPrayerTimes(userId) {
     const userTimezone = user.location?.timezone || 'Asia/Almaty';
 
     let prayerTimes = null;
+    const hasCoords = user.location?.latitude && user.location?.longitude;
+    const isKazakhstan = /kazakh|казах|kz/i.test(user.location?.country || '');
 
-    // ✅ ПРИОРИТЕТ 1: Координаты (самое точное!)
-    if (user.location?.latitude && user.location?.longitude) {
+    // ✅ ПРИОРИТЕТ 1: Координаты + Казахстан → Муфтият KZ (официальный источник)
+    if (hasCoords && isKazakhstan) {
+      prayerTimes = await getPrayerTimesByMuftyat(
+        user.location.latitude,
+        user.location.longitude,
+        userTimezone,
+        user.location.city || ''
+      );
+      if (prayerTimes) {
+        console.log(`🕌 Муфтият KZ: userId ${userId} (${userTimezone}), дата: ${prayerTimes.date}`);
+      } else {
+        console.warn(`⚠️ Муфтият KZ не ответил, fallback на Aladhan`);
+      }
+    }
+
+    // ✅ ПРИОРИТЕТ 2: Координаты (Aladhan) — для не-KZ или fallback
+    if (!prayerTimes && hasCoords) {
       prayerTimes = await getPrayerTimesByCoordinates(
         user.location.latitude,
         user.location.longitude,
         userTimezone
       );
-      console.log(`📍 Координаты: userId ${userId} (${userTimezone}), дата: ${prayerTimes?.date}`);
+      console.log(`📍 Aladhan координаты: userId ${userId} (${userTimezone}), дата: ${prayerTimes?.date}`);
     }
-    // ✅ ПРИОРИТЕТ 2: Город
-    else if (user.location?.city) {
+    // ✅ ПРИОРИТЕТ 3: Город
+    if (!prayerTimes && user.location?.city) {
       prayerTimes = await getPrayerTimesByCity(
         user.location.city,
         user.location.country || 'Kazakhstan',
