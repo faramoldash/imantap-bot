@@ -211,11 +211,10 @@ export async function updateUserPrayerTimes(userId) {
 
     let prayerTimes = null;
     const hasCoords = user.location?.latitude && user.location?.longitude;
-    const isKazakhstan = /kazakh|казах|kz/i.test(user.location?.country || '');
-    // По умолчанию ҚМДБ (muftyat), пользователь может переключить на aladhan
-    const useMuftyat = isKazakhstan && user.prayerTimeSource !== 'aladhan';
+    // По умолчанию ҚМДБ для всех, пользователь может переключить на aladhan
+    const useMuftyat = user.prayerTimeSource !== 'aladhan';
 
-    // ✅ ПРИОРИТЕТ 1: Координаты + Казахстан + ҚМДБ → Муфтият KZ (официальный источник)
+    // ✅ ПРИОРИТЕТ 1: ҚМДБ (Муфтият) — для всех у кого есть координаты
     if (hasCoords && useMuftyat) {
       prayerTimes = await getPrayerTimesByMuftyat(
         user.location.latitude,
