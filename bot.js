@@ -6,6 +6,10 @@ import fs from 'fs';
 import path from 'path';
 import geoTz from 'geo-tz';
 import { connectDB, getDB, createIndexes } from './db.js';
+import {
+  RAMADAN_START_DATE, EID_AL_FITR_DATE,
+  SHAWWAL_START_DATE, SHAWWAL_END_DATE,
+} from './config.js';
 import { getPrayerTimesByCity, calculateReminderTime, updateUserPrayerTimes } from './prayerTimesService.js';
 import {
   getOrCreateUser,
@@ -420,14 +424,10 @@ async function sendPersonalizedRamadanReminder(type) {
           }
 
           // Определяем период
-          const SHAWWAL_START = '2026-03-21';
-          const SHAWWAL_END   = '2026-04-19';
-          const RAMADAN_START = '2026-02-19'; // ваша дата
-          const EID_DATE      = '2026-03-20';
           const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: userTimezone });
 
-          const isRamadan = todayStr >= RAMADAN_START && todayStr < EID_DATE;
-          const isShawwal = todayStr >= SHAWWAL_START && todayStr <= SHAWWAL_END;
+          const isRamadan = todayStr >= RAMADAN_START_DATE && todayStr < EID_AL_FITR_DATE;
+          const isShawwal = todayStr >= SHAWWAL_START_DATE && todayStr <= SHAWWAL_END_DATE;
           const shawwalDone = (user.shawwalFasts || 0) >= 6;
 
           // Не сезон или Шаввал уже выполнен — пропускаем этого пользователя
@@ -4586,10 +4586,7 @@ const server = http.createServer(async (req, res) => {
           const userTZ = user.location?.timezone || 'Asia/Almaty';
           const todayStr = date || new Date().toLocaleDateString('en-CA', { timeZone: userTZ });
 
-          const SHAWWAL_START = '2026-03-21';
-          const SHAWWAL_END   = '2026-04-19';
-
-          if (todayStr < SHAWWAL_START || todayStr > SHAWWAL_END) {
+          if (todayStr < SHAWWAL_START_DATE || todayStr > SHAWWAL_END_DATE) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ error: 'Not shawwal period' }));
           }

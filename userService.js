@@ -1,5 +1,9 @@
 // userService.js
 import { getDB } from './db.js';
+import {
+  RAMADAN_START_DATE, PREPARATION_START_DATE,
+  EID_AL_FITR_MS,
+} from './config.js';
 
 /**
  * ✅ ТАБЛИЦА НАЧИСЛЕНИЯ XP ЗА ЗАДАЧИ
@@ -182,7 +186,8 @@ async function updateUserProgress(userId, progressData) {
         const dayNum = parseInt(day);
         const newDayData = progressData.progress[day];
         const oldDayData = oldProgress[day] || {};
-        const ramadanDay = new Date(2026, 1, 19 + (dayNum - 1));
+        const [rY, rM, rD] = RAMADAN_START_DATE.split('-').map(Number);
+        const ramadanDay = new Date(rY, rM - 1, rD + (dayNum - 1));
         const dayDateStr = ramadanDay.toLocaleDateString('en-CA', { timeZone: userTimezone });
         if (dayDateStr === todayDateStr) {
           for (const taskKey in newDayData) {
@@ -205,7 +210,8 @@ async function updateUserProgress(userId, progressData) {
         const dayNum = parseInt(day);
         const newDayData = progressData.preparationProgress[day];
         const oldDayData = oldPrep[day] || {};
-        const prepDay = new Date(2026, 1, 9 + (dayNum - 1));
+        const [pY, pM, pD] = PREPARATION_START_DATE.split('-').map(Number);
+        const prepDay = new Date(pY, pM - 1, pD + (dayNum - 1));
         const dayDateStr = prepDay.toLocaleDateString('en-CA', { timeZone: userTimezone });
         if (dayDateStr === todayDateStr) {
           for (const taskKey in newDayData) {
@@ -797,8 +803,7 @@ async function getFilteredLeaderboard(options = {}) {
 async function addReferralXP(userId, type = 'registration', referredUserId = null, referredUserName = null) {
   try {
     const now = new Date();
-    const eidDate = new Date('2026-03-20T23:59:59+05:00');
-    if (now > eidDate) return { success: false, reason: 'period_ended' };
+    if (now.getTime() > EID_AL_FITR_MS) return { success: false, reason: 'period_ended' };
     const users = getDB().collection('users');
 
     // Читаем только timezone — один лёгкий запрос

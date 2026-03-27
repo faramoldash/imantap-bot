@@ -1,4 +1,8 @@
 import { getDB } from '../db.js';
+import {
+  RAMADAN_START_DATE, PREPARATION_START_DATE, FIRST_TARAWEEH_DATE,
+  RAMADAN_DAYS, PREPARATION_DAYS,
+} from '../config.js';
 
 // Генерация уникального ID круга
 function generateCircleId() {
@@ -167,24 +171,21 @@ async function getCircleDetails(circleId, requesterId) {
     const almatyTime = new Date(now.getTime() + (almatyOffset + now.getTimezoneOffset()) * 60000);
     const today = almatyTime.toISOString().split('T')[0];
 
-    // Правильный расчет текущего дня с учетом Almaty timezone
-    const ramadanStart = new Date('2026-02-19T00:00:00+05:00');
-    const preparationStart = new Date('2026-02-09T00:00:00+05:00');
+    // Расчет текущего дня с учетом Almaty timezone
+    const ramadanStart = new Date(RAMADAN_START_DATE + 'T00:00:00+05:00');
+    const preparationStart = new Date(PREPARATION_START_DATE + 'T00:00:00+05:00');
 
     const isRamadanStarted = almatyTime >= ramadanStart;
     const isPreparationStarted = almatyTime >= preparationStart;
 
     let currentDayNumber;
     if (isRamadanStarted) {
-      // Рамадан начался - считаем дни Рамадана
       const daysSinceRamadan = Math.floor((almatyTime - ramadanStart) / (1000 * 60 * 60 * 24));
-      currentDayNumber = Math.max(1, Math.min(daysSinceRamadan + 1, 29)); // Максимум 29 дней Рамадана
+      currentDayNumber = Math.max(1, Math.min(daysSinceRamadan + 1, RAMADAN_DAYS));
     } else if (isPreparationStarted) {
-      // Подготовка - считаем дни подготовки
       const daysSincePrep = Math.floor((almatyTime - preparationStart) / (1000 * 60 * 60 * 24));
-      currentDayNumber = Math.max(1, Math.min(daysSincePrep + 1, 10));
+      currentDayNumber = Math.max(1, Math.min(daysSincePrep + 1, PREPARATION_DAYS));
     } else {
-      // До подготовки
       currentDayNumber = 1;
     }
 
@@ -234,8 +235,7 @@ async function getCircleDetails(circleId, requesterId) {
             const dayOfWeek = almatyTime.getDay();
             const isMondayOrThursday = dayOfWeek === 1 || dayOfWeek === 4;
             
-            // Дата первого таравиха
-            const firstTaraweehDate = new Date('2026-02-18T00:00:00+05:00');
+            const firstTaraweehDate = new Date(FIRST_TARAWEEH_DATE + 'T00:00:00+05:00');
             const isFirstTaraweehDay = almatyTime.toDateString() === firstTaraweehDate.toDateString();
             
             if (isMondayOrThursday) tasks.push('fasting');
