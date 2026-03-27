@@ -600,16 +600,25 @@ async function updatePaymentStatus(userId, status, additionalData = {}) {
 async function approvePayment(userId) {
   const db = getDB();
   const users = db.collection('users');
-  const user = await users.findOne({ userId });
   const subscriptionExpiresAt = new Date();
   subscriptionExpiresAt.setDate(subscriptionExpiresAt.getDate() + 90);
-  await users.updateOne({ userId }, {
-    $set: {
-      paymentStatus: 'paid', accessType: 'full', paymentDate: new Date(),
-      subscriptionExpiresAt, subscriptionNotified3Days: false, subscriptionNotified1Day: false,
-      onboardingCompleted: true, updatedAt: new Date()
-    }
-  });
+
+  // Атомарно меняем статус только если он сейчас 'pending'.
+  // Если документ не вернулся — одобрение уже было выполнено, выходим.
+  const user = await users.findOneAndUpdate(
+    { userId, paymentStatus: 'pending' },
+    {
+      $set: {
+        paymentStatus: 'paid', accessType: 'full', paymentDate: new Date(),
+        subscriptionExpiresAt, subscriptionNotified3Days: false, subscriptionNotified1Day: false,
+        onboardingCompleted: true, updatedAt: new Date()
+      }
+    },
+    { returnDocument: 'before' }
+  );
+
+  if (!user) return false; // Уже одобрено или пользователь не найден
+
   if (user.referredBy) {
     const referrer = await users.findOne({ promoCode: user.referredBy });
     if (referrer) await addReferralXP(referrer.userId, 'payment', userId, user.name);
@@ -620,7 +629,18 @@ async function approvePayment(userId) {
 async function rejectPayment(userId) {
   const db = getDB();
   const users = db.collection('users');
-  const user = await users.findOne({ userId });
+
+  // Атомарно меняем статус только если он сейчас 'pending'.
+  // returnDocument: 'before' — читаем состояние ДО записи, чтобы правильно
+  // решить, давать ли демо. Если документ не вернулся — заявка уже отклонена.
+  const user = await users.findOneAndUpdate(
+    { userId, paymentStatus: 'pending' },
+    { $set: { paymentStatus: 'unpaid', updatedAt: new Date() } },
+    { returnDocument: 'before' }
+  );
+
+  if (!user) return { demoStatus: 'none', demoExpiresAt: null }; // Уже отклонено
+
   let demoExpiresAt = null, accessType = null, demoStatus = 'none';
   if (user.accessType === 'demo' && user.demoExpiresAt && new Date() < new Date(user.demoExpiresAt)) {
     demoExpiresAt = user.demoExpiresAt; accessType = 'demo'; demoStatus = 'active';
@@ -630,10 +650,13 @@ async function rejectPayment(userId) {
     demoExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
     accessType = 'demo'; demoStatus = 'given_new';
   }
+
   await users.updateOne({ userId }, {
-    $set: { paymentStatus: 'unpaid', accessType, demoExpiresAt,
+    $set: {
+      accessType, demoExpiresAt,
       demoGivenOnRejection: demoStatus === 'given_new' ? true : user.demoGivenOnRejection,
-      updatedAt: new Date() }
+      updatedAt: new Date()
+    }
   });
   return { demoStatus, demoExpiresAt };
 }
@@ -774,32 +797,57 @@ async function getFilteredLeaderboard(options = {}) {
 async function addReferralXP(userId, type = 'registration', referredUserId = null, referredUserName = null) {
   try {
     const now = new Date();
-    // FIX #B3: используем getTodayStr для консистентности
-    const user0 = await getDB().collection('users').findOne({ userId: parseInt(userId) });
-    const refTz = user0?.location?.timezone || 'Asia/Almaty';
-    const todayDateStr = getTodayStr(refTz);
     const eidDate = new Date('2026-03-20T23:59:59+05:00');
     if (now > eidDate) return { success: false, reason: 'period_ended' };
     const users = getDB().collection('users');
-    const user = user0 || await users.findOne({ userId: parseInt(userId) });
-    if (!user) return { success: false, reason: 'user_not_found' };
+
+    // Читаем только timezone — один лёгкий запрос
+    const userTz = await users.findOne(
+      { userId: parseInt(userId) },
+      { projection: { 'location.timezone': 1 } }
+    );
+    if (!userTz) return { success: false, reason: 'user_not_found' };
+    const todayDateStr = getTodayStr(userTz.location?.timezone || 'Asia/Almaty');
+
     let finalXP = 0, multiplier = 1.0, todayCount = 0;
+
     if (type === 'payment') {
       finalXP = 400;
+      // Атомарно добавляем XP — без read-then-write
+      await users.updateOne(
+        { userId: parseInt(userId) },
+        { $inc: { xp: finalXP }, $set: { updatedAt: new Date() } }
+      );
     } else {
-      const dailyReferrals = user.dailyReferrals || {};
-      todayCount = (dailyReferrals[todayDateStr] || 0) + 1;
+      // Атомарно инкрементируем счётчик рефералов и invitedCount,
+      // получаем новое значение после инкремента (returnDocument: 'after')
+      const updated = await users.findOneAndUpdate(
+        { userId: parseInt(userId) },
+        {
+          $inc: {
+            [`dailyReferrals.${todayDateStr}`]: 1,
+            invitedCount: 1,
+          },
+          $set: { updatedAt: new Date() },
+        },
+        { returnDocument: 'after', projection: { dailyReferrals: 1 } }
+      );
+      if (!updated) return { success: false, reason: 'user_not_found' };
+
+      // Рассчитываем мультипликатор по актуальному (уже записанному) счётчику
+      todayCount = updated.dailyReferrals?.[todayDateStr] || 1;
       if (todayCount >= 50) multiplier = 2.0;
       else if (todayCount >= 20) multiplier = 1.6;
       else if (todayCount >= 5) multiplier = 1.3;
       finalXP = Math.floor(100 * multiplier);
+
+      // Атомарно добавляем XP
+      await users.updateOne(
+        { userId: parseInt(userId) },
+        { $inc: { xp: finalXP } }
+      );
     }
-    const updateData = { xp: (user.xp || 0) + finalXP, updatedAt: new Date() };
-    if (type === 'registration') {
-      updateData[`dailyReferrals.${todayDateStr}`] = todayCount;
-      updateData.invitedCount = (user.invitedCount || 0) + 1;
-    }
-    await users.updateOne({ userId: parseInt(userId) }, { $set: updateData });
+
     return { success: true, xp: finalXP, multiplier: type === 'payment' ? 1.0 : multiplier, todayCount: type === 'registration' ? todayCount : 0, referredUserName, type };
   } catch (error) { console.error('❌ addReferralXP:', error); return { success: false, reason: 'error' }; }
 }
