@@ -522,7 +522,12 @@ schedule.scheduleJob('30 19 * * *', async () => {
     for (let i = 0; i < allUsers.length; i += BATCH_SIZE) {
       const batch = allUsers.slice(i, i + BATCH_SIZE);
       const results = await Promise.all(
-        batch.map(user => updateUserPrayerTimes(user.userId))
+        batch.map(user =>
+          updateUserPrayerTimes(user.userId).catch(err => {
+            console.error(`❌ Ошибка обновления намаза для userId ${user.userId}:`, err?.message || err);
+            return false;
+          })
+        )
       );
       updated += results.filter(Boolean).length;
       console.log(`⏳ Обновлено ${Math.min(i + BATCH_SIZE, allUsers.length)}/${allUsers.length}...`);
