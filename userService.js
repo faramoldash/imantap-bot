@@ -317,6 +317,9 @@ async function updateUserProgress(userId, progressData) {
     if (shouldUpdate(progressData.preparationProgress)) updateFields.preparationProgress = progressData.preparationProgress;
     if (shouldUpdate(progressData.basicProgress)) updateFields.basicProgress = progressData.basicProgress;
 
+    // Стрик-множитель для духовных практик (как и для намаза)
+    const streakMultiplierSpiritual = Math.min(1 + ((oldUser.currentStreak || 0) * 0.1), 3.0);
+
     // memorizedNames — только растёт
     if (progressData.memorizedNames !== undefined) {
       const oldMemorized = oldUser.memorizedNames || [];
@@ -325,8 +328,9 @@ async function updateUserProgress(userId, progressData) {
       updateFields.memorizedNames = merged;
       const newlyMemorized = merged.filter(id => !oldMemorized.includes(id));
       if (newlyMemorized.length > 0) {
-        xpToAdd += newlyMemorized.length * 100;
-        console.log(`📿 +${newlyMemorized.length * 100} XP за новые имена`);
+        const nameXp = Math.floor(newlyMemorized.length * 100 * streakMultiplierSpiritual);
+        xpToAdd += nameXp;
+        console.log(`📿 +${nameXp} XP за новые имена (x${streakMultiplierSpiritual.toFixed(2)})`);
       }
     }
 
@@ -339,15 +343,20 @@ async function updateUserProgress(userId, progressData) {
       updateFields.earnedJuzXpIds = merged;
       const newlyEarned = merged.filter(id => !oldEarned.includes(id));
       if (newlyEarned.length > 0) {
-        xpToAdd += newlyEarned.length * 150;
-        console.log(`📖 +${newlyEarned.length * 150} XP за новые пары`);
+        const juzXp = Math.floor(newlyEarned.length * 150 * streakMultiplierSpiritual);
+        xpToAdd += juzXp;
+        console.log(`📖 +${juzXp} XP за новые джузы (x${streakMultiplierSpiritual.toFixed(2)})`);
       }
     }
 
     if (progressData.quranKhatams !== undefined) {
       const oldKhatams = oldUser.quranKhatams || 0;
       const newKhatams = progressData.quranKhatams || 0;
-      if (newKhatams > oldKhatams && oldKhatams === 0) { xpToAdd += 1000; console.log(`🕋 +1000 XP за первый хатым!`); }
+      if (newKhatams > oldKhatams && oldKhatams === 0) {
+        const khatamXp = Math.floor(1000 * streakMultiplierSpiritual);
+        xpToAdd += khatamXp;
+        console.log(`🕋 +${khatamXp} XP за первый хатым! (x${streakMultiplierSpiritual.toFixed(2)})`);
+      }
       updateFields.quranKhatams = newKhatams;
     }
 

@@ -3353,8 +3353,8 @@ bot.onText(/\/admin_stats/, async (msg) => {
     });
 
     // Средний XP
-    const allUsers = await users.find({}).toArray();
-    const avgXP = allUsers.reduce((sum, u) => sum + (u.xp || 0), 0) / totalUsers;
+    const xpAgg = await users.aggregate([{ $group: { _id: null, avg: { $avg: '$xp' } } }]).next();
+    const avgXP = xpAgg?.avg || 0;
 
     // Конверсия
     const conversionRate = ((paidUsers / totalUsers) * 100).toFixed(1);
@@ -3621,26 +3621,23 @@ bot.onText(/\/admin_geo/, async (msg) => {
     const users = db.collection('users');
 
     // Топ стран
-    const allUsers = await users.find({ 'location.country': { $ne: null } }).toArray();
-    
-    const countryCounts = {};
-    const cityCounts = {};
+    const [countryAgg, cityAgg] = await Promise.all([
+      users.aggregate([
+        { $match: { 'location.country': { $ne: null } } },
+        { $group: { _id: { $ifNull: ['$location.country', 'Unknown'] }, count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 5 }
+      ]).toArray(),
+      users.aggregate([
+        { $match: { 'location.city': { $ne: null } } },
+        { $group: { _id: { $ifNull: ['$location.city', 'Unknown'] }, count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 10 }
+      ]).toArray()
+    ]);
 
-    allUsers.forEach(user => {
-      const country = user.location?.country || 'Unknown';
-      const city = user.location?.city || 'Unknown';
-      
-      countryCounts[country] = (countryCounts[country] || 0) + 1;
-      cityCounts[city] = (cityCounts[city] || 0) + 1;
-    });
-
-    const topCountries = Object.entries(countryCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5);
-
-    const topCities = Object.entries(cityCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10);
+    const topCountries = countryAgg.map(r => [r._id, r.count]);
+    const topCities = cityAgg.map(r => [r._id, r.count]);
 
     let message = `🌍 *География пользователей*\n\n`;
     message += `🌎 *Топ-5 стран:*\n`;

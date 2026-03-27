@@ -24,10 +24,19 @@ function generateInviteCode() {
  */
 async function createCircle(ownerId, name, description = '') {
   try {
+    const trimmedName = name?.trim();
+    if (!trimmedName || trimmedName.length > 50) {
+      throw new Error('Circle name must be 1–50 characters');
+    }
+    const trimmedDesc = (description || '').trim();
+    if (trimmedDesc.length > 200) {
+      throw new Error('Description must be 200 characters or fewer');
+    }
+
     const db = getDB();
     const circles = db.collection('circles');
     const users = db.collection('users');
-    
+
     // Получаем данные создателя
     const owner = await users.findOne({ userId: parseInt(ownerId) });
     
@@ -51,8 +60,8 @@ async function createCircle(ownerId, name, description = '') {
     
     const circle = {
       circleId,
-      name,
-      description,
+      name: trimmedName,
+      description: trimmedDesc,
       ownerId: parseInt(ownerId),
       members: [{
         userId: parseInt(ownerId),
@@ -165,11 +174,11 @@ async function getCircleDetails(circleId, requesterId) {
       throw new Error('Access denied');
     }
     
-    // Получаем прогресс каждого участника за сегодня
-    const almatyOffset = 5 * 60; // +5 часов в минутах
+    // Получаем прогресс каждого участника за сегодня (используем Almaty TZ как эталон)
     const now = new Date();
-    const almatyTime = new Date(now.getTime() + (almatyOffset + now.getTimezoneOffset()) * 60000);
-    const today = almatyTime.toISOString().split('T')[0];
+    const today = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Almaty' });
+    // almatyTime нужен для сравнения с Date-объектами фаз
+    const almatyTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Almaty' }));
 
     // Расчет текущего дня с учетом Almaty timezone
     const ramadanStart = new Date(RAMADAN_START_DATE + 'T00:00:00+05:00');
@@ -297,33 +306,15 @@ async function inviteToCircle(circleId, inviterId, targetUsername) {
       throw new Error('Circle is full');
     }
     
-    // Ищем пользователя по username (с @ и без)
-    const cleanUsername = targetUsername.replace('@', '');
+    // Ищем пользователя по username — один запрос с case-insensitive regex (с @ и без)
+    const cleanUsername = targetUsername.replace('@', '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    console.log('🔍 Ищем пользователя:', { original: targetUsername, cleaned: cleanUsername });
 
-    console.log('🔍 Ищем пользователя:', {
-      original: targetUsername,
-      cleaned: cleanUsername
+    const targetUser = await users.findOne({
+      username: { $regex: new RegExp(`^@?${cleanUsername}$`, 'i') }
     });
 
-    // Пробуем найти с @
-    let targetUser = await users.findOne({ username: `@${cleanUsername}` });
-
-    // Если не нашли - пробуем без @
     if (!targetUser) {
-      targetUser = await users.findOne({ username: cleanUsername });
-    }
-
-    // Если не нашли - пробуем case-insensitive
-    if (!targetUser) {
-      targetUser = await users.findOne({
-        username: { $regex: new RegExp(`^@?${cleanUsername}$`, 'i') }
-      });
-    }
-
-    if (!targetUser) {
-      // Покажем примеры для отладки
-      const samples = await users.find({}).limit(3).project({ username: 1, userId: 1 }).toArray();
-      console.log('❌ Пользователь не найден. Примеры в базе:', samples);
       throw new Error('User not found');
     }
 
