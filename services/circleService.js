@@ -1,7 +1,7 @@
 import { getDB } from '../db.js';
 import {
   RAMADAN_START_DATE, PREPARATION_START_DATE, FIRST_TARAWEEH_DATE,
-  RAMADAN_DAYS, PREPARATION_DAYS,
+  EID_AL_FITR_DATE, RAMADAN_DAYS, PREPARATION_DAYS,
 } from '../config.js';
 
 // Генерация уникального ID круга
@@ -182,31 +182,31 @@ async function getCircleDetails(circleId, requesterId) {
 
     // Расчет текущего дня с учетом Almaty timezone
     const ramadanStart = new Date(RAMADAN_START_DATE + 'T00:00:00+05:00');
+    const eidDate       = new Date(EID_AL_FITR_DATE  + 'T00:00:00+05:00');
     const preparationStart = new Date(PREPARATION_START_DATE + 'T00:00:00+05:00');
 
-    const isRamadanStarted = almatyTime >= ramadanStart;
-    const isPreparationStarted = almatyTime >= preparationStart;
+    // Три фазы: подготовка → Рамадан → базовая/Шавваль
+    const isRamadanActive     = almatyTime >= ramadanStart && almatyTime < eidDate;
+    const isPreparationActive = almatyTime >= preparationStart && almatyTime < ramadanStart;
+    // После Ейда — базовая фаза, today (строка даты) используется как ключ
 
     let currentDayNumber;
-    if (isRamadanStarted) {
+    if (isRamadanActive) {
       const daysSinceRamadan = Math.floor((almatyTime - ramadanStart) / (1000 * 60 * 60 * 24));
       currentDayNumber = Math.max(1, Math.min(daysSinceRamadan + 1, RAMADAN_DAYS));
-    } else if (isPreparationStarted) {
+    } else if (isPreparationActive) {
       const daysSincePrep = Math.floor((almatyTime - preparationStart) / (1000 * 60 * 60 * 24));
       currentDayNumber = Math.max(1, Math.min(daysSincePrep + 1, PREPARATION_DAYS));
     } else {
-      currentDayNumber = 1;
+      currentDayNumber = null; // базовая фаза — ключ это строка даты (today)
     }
-
-    const todayKey = `day_${currentDayNumber}`;
 
     console.log('📅 ТЕКУЩАЯ ДАТА:', {
       almatyTime: almatyTime.toISOString(),
       today,
-      isRamadanStarted,
-      isPreparationStarted,
+      isRamadanActive,
+      isPreparationActive,
       currentDayNumber,
-      todayKey
     });
 
     const membersWithProgress = await Promise.all(
@@ -214,41 +214,48 @@ async function getCircleDetails(circleId, requesterId) {
         .filter(m => m.status === 'active')
         .map(async (member) => {
           const user = await users.findOne({ userId: member.userId });
-          
+
           if (!user) return null;
-          
-          // Прогресс подготовки (если Рамадан не начался)
-          const prepProgress = user.preparationProgress || {};
+
+          const prepProgress    = user.preparationProgress || {};
           const ramadanProgress = user.progress || {};
-          
-          // Определяем какой прогресс показывать
-          const dailyProgress = isRamadanStarted 
-            ? ramadanProgress[todayKey] || {}
-            : prepProgress[currentDayNumber] || {};
-          
-          // Считаем процент выполнения
-          // Определяем список задач в зависимости от периода
-          let tasks;
-          if (isRamadanStarted) {
-            // Задачи Рамадана (10 задач)
-            tasks = ['fasting', 'fajr', 'duha', 'dhuhr', 'asr', 'maghrib', 'isha', 'quranRead', 'morningDhikr', 'eveningDhikr'];
+          const basicProgress   = user.basicProgress || {};
+
+          // Баг 1 исправлен: Рамадан-прогресс хранится по числовому ключу (1, 2, ..., 29),
+          // не по строке 'day_N'. Базовая фаза — по строке даты (today = 'YYYY-MM-DD').
+          let dailyProgress;
+          if (isRamadanActive) {
+            dailyProgress = ramadanProgress[currentDayNumber] || {};
+          } else if (isPreparationActive) {
+            dailyProgress = prepProgress[currentDayNumber] || {};
           } else {
+            dailyProgress = basicProgress[today] || {};
+          }
+
+          // Список задач по фазе
+          let tasks;
+          if (isRamadanActive) {
+            tasks = ['fasting', 'fajr', 'duha', 'dhuhr', 'asr', 'maghrib', 'isha', 'quranRead', 'morningDhikr', 'eveningDhikr'];
+          } else if (isPreparationActive) {
             // Задачи подготовки - базовые (12 задач)
             tasks = [
               'fajr', 'duha', 'dhuhr', 'asr', 'maghrib', 'isha',
-              'morningDhikr', 'eveningDhikr', 'quranRead', 
+              'morningDhikr', 'eveningDhikr', 'quranRead',
               'salawat', 'hadith', 'charity'
             ];
-            
-            // Добавляем условные задачи подготовки
             const dayOfWeek = almatyTime.getDay();
             const isMondayOrThursday = dayOfWeek === 1 || dayOfWeek === 4;
-            
             const firstTaraweehDate = new Date(FIRST_TARAWEEH_DATE + 'T00:00:00+05:00');
             const isFirstTaraweehDay = almatyTime.toDateString() === firstTaraweehDate.toDateString();
-            
             if (isMondayOrThursday) tasks.push('fasting');
             if (isFirstTaraweehDay) tasks.push('taraweeh');
+          } else {
+            // Базовая/Шавваль фаза — те же 12 задач без условных
+            tasks = [
+              'fajr', 'duha', 'dhuhr', 'asr', 'maghrib', 'isha',
+              'morningDhikr', 'eveningDhikr', 'quranRead',
+              'salawat', 'charity', 'book'
+            ];
           }
           const completed = tasks.filter(task => dailyProgress[task]).length;
           const progressPercent = Math.round((completed / tasks.length) * 100);
