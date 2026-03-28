@@ -107,7 +107,23 @@ export async function createIndexes() {
     // ✅ Индекс для поиска неактивных пользователей
     await users.createIndex({ lastActiveDate: 1 });
     console.log('✅ Index: lastActiveDate');
-    
+
+    await users.createIndex({ subscriptionExpiresAt: 1 });
+    console.log('✅ Index: subscriptionExpiresAt');
+
+    // ✅ Составные индексы для лидербордов
+    await users.createIndex({ paymentStatus: 1, xp: -1 });
+    console.log('✅ Composite Index: paymentStatus + xp');
+
+    await users.createIndex({ referredBy: 1, paymentStatus: 1, xp: -1 });
+    console.log('✅ Composite Index: referredBy + paymentStatus + xp');
+
+    await users.createIndex({ onboardingCompleted: 1, 'location.country': 1, xp: -1 });
+    console.log('✅ Composite Index: onboardingCompleted + location.country + xp');
+
+    await users.createIndex({ onboardingCompleted: 1, 'location.country': 1, 'location.city': 1, xp: -1 });
+    console.log('✅ Composite Index: onboardingCompleted + location.country + location.city + xp');
+
     console.log('🎉 Все индексы успешно созданы!');
   } catch (error) {
     console.error('❌ Ошибка создания индексов:', error);
