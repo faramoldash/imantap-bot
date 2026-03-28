@@ -2699,7 +2699,7 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
     if (user.paymentStatus === 'subscription_expired') {
       bot.sendMessage(
         chatId,
-        `❌ Сәлем, ${from.firstname}!\n\n` +
+        `❌ Сәлем, ${from.first_name}!\n\n` +
         `Сіздің жазылымыңыз аяқталды.\n\n` +
         `📅 Аяқталған күн: ${new Date(user.subscriptionExpiresAt).toLocaleDateString('kk-KZ')}\n\n` +
         `🔄 Жаңарту үшін төмендегі батырманы басыңыз:`,
