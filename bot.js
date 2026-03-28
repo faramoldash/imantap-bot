@@ -517,25 +517,20 @@ schedule.scheduleJob('30 19 * * *', async () => {
     }).toArray();
 
     let updated = 0;
-    const BATCH_SIZE = 10;
 
-    for (let i = 0; i < allUsers.length; i += BATCH_SIZE) {
-      const batch = allUsers.slice(i, i + BATCH_SIZE);
-      const results = await Promise.all(
-        batch.map(user =>
-          updateUserPrayerTimes(user.userId).catch(err => {
-            console.error(`❌ Ошибка обновления намаза для userId ${user.userId}:`, err?.message || err);
-            return false;
-          })
-        )
-      );
-      updated += results.filter(Boolean).length;
-      console.log(`⏳ Обновлено ${Math.min(i + BATCH_SIZE, allUsers.length)}/${allUsers.length}...`);
-
-      // Пауза между батчами — не перегружаем Aladhan API
-      if (i + BATCH_SIZE < allUsers.length) {
-        await new Promise(resolve => setTimeout(resolve, 1500));
+    for (let i = 0; i < allUsers.length; i++) {
+      const user = allUsers[i];
+      try {
+        const result = await updateUserPrayerTimes(user.userId);
+        if (result) updated++;
+      } catch (err) {
+        console.error(`❌ Ошибка обновления намаза для userId ${user.userId}:`, err?.message || err);
       }
+      if ((i + 1) % 50 === 0) {
+        console.log(`⏳ Обновлено ${i + 1}/${allUsers.length}...`);
+      }
+      // Throttle: 300ms между запросами — не перегружаем Aladhan и Муфтият API
+      await new Promise(resolve => setTimeout(resolve, 300));
     }
 
     console.log(`✅ Намазы обновлены: ${updated}/${allUsers.length} пользователей`);
