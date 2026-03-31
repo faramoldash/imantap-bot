@@ -124,6 +124,18 @@ export async function createIndexes() {
     await users.createIndex({ onboardingCompleted: 1, 'location.country': 1, 'location.city': 1, xp: -1 });
     console.log('✅ Composite Index: onboardingCompleted + location.country + location.city + xp');
 
+    // ✅ Конкурсы
+    const contests = db.collection('contests');
+    await contests.createIndex({ status: 1 });
+    await contests.createIndex({ status: 1, endDate: -1 });
+    console.log('✅ Index: contests status, endDate');
+
+    const cp = db.collection('contest_participants');
+    await cp.createIndex({ contestId: 1, xp: -1, updatedAt: 1 });
+    console.log('✅ Index: contest_participants leaderboard');
+    await cp.createIndex({ contestId: 1, userId: 1 }, { unique: true });
+    console.log('✅ Index: contest_participants unique participant');
+
     console.log('🎉 Все индексы успешно созданы!');
   } catch (error) {
     console.error('❌ Ошибка создания индексов:', error);

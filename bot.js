@@ -63,6 +63,11 @@ import {
   removeMember,
   deleteCircle
 } from './services/circleService.js';
+import {
+  createContest, activateContest, getCurrentContest, getActiveContest,
+  addContestXp, getContestLeaderboard, getUserContestRank, finalizeContest,
+  checkMissedContests, getUpcomingAndActiveContests, getContestById,
+} from './services/contestService.js';
 import { getCityByCoordinates, getKazakhstanCities } from './utils/cityMapping.js';
 
 // Экранирование специальных символов для Markdown
@@ -92,6 +97,22 @@ function escapeMarkdown(text) {
 // Форматирование цены с пробелом для тысяч (2490 → 2 490)
 function formatPrice(price) {
   return price.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+}
+
+/**
+ * Парсит дату "ДД.ММ.ГГГГ ЧЧ:ММ" как Asia/Almaty время и возвращает UTC Date.
+ */
+function parseAlmatyDate(str) {
+  const m = str.trim().match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2})$/);
+  if (!m) return null;
+  const [, dd, mm, yyyy, hh, min] = m;
+  // Asia/Almaty = UTC+5, no DST
+  const utcMs = Date.UTC(
+    parseInt(yyyy), parseInt(mm) - 1, parseInt(dd),
+    parseInt(hh) - 5, parseInt(min)
+  );
+  const d = new Date(utcMs);
+  return isNaN(d.getTime()) ? null : d;
 }
 
 // ✅ Простая защита от DDOS
@@ -184,6 +205,17 @@ await connectDB();
 
 // Создаём индексы (выполнится один раз)
 await createIndexes();
+
+  // ─── Contest startup checks ─────────────────────────────────────────────────
+  try {
+    const missed = await checkMissedContests();
+    console.log(`✅ Проверка конкурсов: активировано ${missed.activated}, финализировано ${missed.finalized}`);
+    const active = await getUpcomingAndActiveContests();
+    for (const c of active) scheduleContestJobs(c);
+    console.log(`✅ Перепланировано ${active.length} конкурсов`);
+  } catch (err) {
+    console.error('❌ Ошибка при проверке конкурсов на старте:', err);
+  }
 
 // =====================================================
 // 🌙 ПЕРСОНАЛИЗИРОВАННЫЕ РАМАЗАН УВЕДОМЛЕНИЯ
@@ -769,6 +801,25 @@ schedule.scheduleJob('0 10 * * *', async () => {
 });
 
 console.log('✅ Система проверки подписок настроена (10:00 UTC)\n');
+
+// ✅ Конкурс: мотивационные уведомления 12:00 Asia/Almaty = 07:00 UTC
+schedule.scheduleJob('0 7 * * *', async () => {
+  try {
+    await sendDailyContestMotivation('morning');
+  } catch (err) {
+    console.error('❌ Ошибка утреннего уведомления конкурса:', err);
+  }
+});
+
+// ✅ Конкурс: мотивационные уведомления 20:00 Asia/Almaty = 15:00 UTC
+schedule.scheduleJob('0 15 * * *', async () => {
+  try {
+    await sendDailyContestMotivation('evening');
+  } catch (err) {
+    console.error('❌ Ошибка вечернего уведомления конкурса:', err);
+  }
+});
+console.log('⏰ Ежедневные уведомления конкурса запланированы (07:00 и 15:00 UTC)');
 
 // =====================================================
 // 🎯 ОБРАБОТКА ВСЕХ CALLBACK КНОПОК
@@ -2430,6 +2481,113 @@ bot.on('message', async (msg) => {
     
     return;
   }
+
+  // ─── Contest wizard ───────────────────────────────────────────────────────
+  const MAIN_ADMIN = parseInt(process.env.MAIN_ADMIN_ID);
+  if (userId === MAIN_ADMIN) {
+    const state = getState(userId);
+
+    if (state === 'CREATE_CONTEST_NAME') {
+      setSessionData(userId, 'contestName', text);
+      setState(userId, 'CREATE_CONTEST_PRIZE');
+      return bot.sendMessage(chatId,
+        `✅ Название: *${text}*\n\nШаг 2/5: Введите описание приза:`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+    if (state === 'CREATE_CONTEST_PRIZE') {
+      setSessionData(userId, 'contestPrize', text);
+      setState(userId, 'CREATE_CONTEST_START');
+      return bot.sendMessage(chatId,
+        `✅ Приз: *${text}*\n\nШаг 3/5: Введите дату начала (ДД.ММ.ГГГГ ЧЧ:ММ, Asia/Almaty):`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+    if (state === 'CREATE_CONTEST_START') {
+      const parsed = parseAlmatyDate(text);
+      if (!parsed) {
+        return bot.sendMessage(chatId,
+          '❌ Неверный формат. Пример: 01.04.2026 00:00'
+        );
+      }
+      setSessionData(userId, 'contestStart', parsed);
+      setState(userId, 'CREATE_CONTEST_END');
+      return bot.sendMessage(chatId,
+        `✅ Начало: *${text}*\n\nШаг 4/5: Введите дату окончания (ДД.ММ.ГГГГ ЧЧ:ММ, Asia/Almaty):`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+    if (state === 'CREATE_CONTEST_END') {
+      const parsed = parseAlmatyDate(text);
+      if (!parsed) {
+        return bot.sendMessage(chatId,
+          '❌ Неверный формат. Пример: 11.04.2026 23:59'
+        );
+      }
+      setSessionData(userId, 'contestEnd', parsed);
+      setState(userId, 'CREATE_CONTEST_PLACES');
+      return bot.sendMessage(chatId,
+        `✅ Окончание: *${text}*\n\nШаг 5/5: Сколько призовых мест? (например: 3)`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+    if (state === 'CREATE_CONTEST_PLACES') {
+      const places = parseInt(text);
+      if (!places || places < 1 || places > 10) {
+        return bot.sendMessage(chatId, '❌ Введите число от 1 до 10');
+      }
+      setSessionData(userId, 'contestPlaces', places);
+      setState(userId, 'CREATE_CONTEST_CONFIRM');
+
+      const name = getSessionData(userId, 'contestName');
+      const prize = getSessionData(userId, 'contestPrize');
+      const start = getSessionData(userId, 'contestStart');
+      const end = getSessionData(userId, 'contestEnd');
+      return bot.sendMessage(chatId,
+        `📋 *Подтверждение конкурса:*\n\n` +
+        `🏆 Название: ${name}\n` +
+        `🎁 Приз: ${prize}\n` +
+        `📅 Начало: ${start.toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' })}\n` +
+        `📅 Окончание: ${end.toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' })}\n` +
+        `🥇 Призовых мест: ${places}\n\n` +
+        `Отправьте *ДА* для создания или *НЕТ* для отмены.`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+    if (state === 'CREATE_CONTEST_CONFIRM') {
+      if (text.toUpperCase() === 'ДА') {
+        try {
+          const contest = await createContest({
+            name: getSessionData(userId, 'contestName'),
+            prize: getSessionData(userId, 'contestPrize'),
+            startDate: getSessionData(userId, 'contestStart'),
+            endDate: getSessionData(userId, 'contestEnd'),
+            prizePlaces: getSessionData(userId, 'contestPlaces'),
+            createdBy: userId,
+          });
+          clearSession(userId);
+          scheduleContestJobs(contest);
+          bot.sendMessage(chatId,
+            `✅ Конкурс создан!\nID: \`${contest._id}\``,
+            { parse_mode: 'Markdown' }
+          );
+        } catch (err) {
+          console.error('❌ Ошибка создания конкурса:', err);
+          clearSession(userId);
+          bot.sendMessage(chatId, '❌ Ошибка при создании конкурса. Попробуйте снова.');
+        }
+      } else {
+        clearSession(userId);
+        bot.sendMessage(chatId, '❌ Создание конкурса отменено.');
+      }
+      return;
+    }
+  }
 });
 
 // =====================================================
@@ -2596,6 +2754,201 @@ async function notifyAdminsNewPayment(userId, fileId, fileType) {
   } catch (error) {
     console.error('❌ Ошибка в notifyAdminsNewPayment:', error);
   }
+}
+
+// ─── Contest broadcasts ──────────────────────────────────────────────────────
+
+async function broadcastContestStart(contest) {
+  const db = getDB();
+  const paid = await db.collection('users').find({ paymentStatus: 'paid' }).toArray();
+  const unpaid = await db.collection('users').find({
+    paymentStatus: { $in: ['unpaid', 'demo', 'subscription_expired'] },
+    onboardingCompleted: true,
+  }).toArray();
+
+  for (const user of paid) {
+    try {
+      const lang = user.language === 'kk';
+      const endStr = contest.endDate.toLocaleString('ru-RU', { timeZone: 'Asia/Almaty', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+      await bot.sendMessage(user.userId,
+        lang
+          ? `🏆 *Жарыс басталды!*\n\n🕋 *${contest.name}*\n🎁 Жүлде: ${contest.prize}\n📅 Аяқталу: ${endStr}\n\nXP жинап, жеңімпаз болыңыз! Барлық намаз, ораза, Құран — жарысқа XP береді!`
+          : `🏆 *Конкурс начался!*\n\n🕋 *${contest.name}*\n🎁 Приз: ${contest.prize}\n📅 До: ${endStr}\n\nЗарабатывайте XP и побеждайте! Каждый намаз, пост, Коран — приносят XP в конкурс!`,
+        { parse_mode: 'Markdown' }
+      );
+    } catch (_) {}
+    await new Promise(r => setTimeout(r, 50));
+  }
+
+  for (const user of unpaid) {
+    try {
+      const lang = user.language === 'kk';
+      await bot.sendMessage(user.userId,
+        lang
+          ? `🏆 *${contest.name}*\n\n🎁 Жүлде: ${contest.prize}\n\nҚатысу үшін жазылым алыңыз! Толық нұсқаулықты Mini App-та қараңыз.`
+          : `🏆 *${contest.name}*\n\n🎁 Приз: ${contest.prize}\n\nОформи подписку чтобы участвовать! Подробности в Mini App.`,
+        { parse_mode: 'Markdown' }
+      );
+    } catch (_) {}
+    await new Promise(r => setTimeout(r, 50));
+  }
+  console.log(`✅ Рассылка старта конкурса: ${paid.length} paid, ${unpaid.length} unpaid`);
+}
+
+async function broadcastContestReminder(contestId) {
+  const db = getDB();
+  const contest = await getContestById(contestId);
+  if (!contest) return;
+  const paid = await db.collection('users').find({ paymentStatus: 'paid' }).toArray();
+
+  for (const user of paid) {
+    try {
+      const lang = user.language === 'kk';
+      const { rank, xp, xpToNext } = await getUserContestRank(contestId, user.userId);
+      const rankStr = rank ? (lang ? `${rank}-орын` : `${rank} место`) : (lang ? 'Рейтингте жоқ' : 'Не в рейтинге');
+      await bot.sendMessage(user.userId,
+        lang
+          ? `⏰ *Жарысқа 24 сағат қалды!*\n\n🏆 ${contest.name}\n📍 Сіздің орыныңыз: ${rankStr} (${xp} XP)\n${xpToNext ? `⚡ Келесі орынға: ${xpToNext} XP` : '🥇 Алдыңғы орын жоқ!'}\n\nСоңғы мүмкіндікті жіберіп алмаңыз!`
+          : `⏰ *До конца конкурса 24 часа!*\n\n🏆 ${contest.name}\n📍 Ваше место: ${rankStr} (${xp} XP)\n${xpToNext ? `⚡ До следующего места: ${xpToNext} XP` : '🥇 Вы лидер!'}\n\nПоследний шанс — не упустите!`,
+        { parse_mode: 'Markdown' }
+      );
+    } catch (_) {}
+    await new Promise(r => setTimeout(r, 50));
+  }
+}
+
+async function broadcastContestEnd(result) {
+  const { contest, winners } = result;
+  const db = getDB();
+  const paid = await db.collection('users').find({ paymentStatus: 'paid' }).toArray();
+
+  const medals = ['🥇', '🥈', '🥉'];
+  const winnerLines = winners.map(w =>
+    `${medals[w.place - 1] || `${w.place}.`} ${w.name || w.username || 'Пользователь'} — ${w.xp} XP`
+  ).join('\n');
+
+  for (const user of paid) {
+    try {
+      const lang = user.language === 'kk';
+      await bot.sendMessage(user.userId,
+        lang
+          ? `🏆 *${contest.name} аяқталды!*\n\n🎉 *Жеңімпаздар:*\n${winnerLines}\n\n🎁 Жүлде: ${contest.prize}\n\nБарлық қатысушыларға рахмет!`
+          : `🏆 *${contest.name} завершён!*\n\n🎉 *Победители:*\n${winnerLines}\n\n🎁 Приз: ${contest.prize}\n\nСпасибо всем участникам!`,
+        { parse_mode: 'Markdown' }
+      );
+    } catch (_) {}
+    await new Promise(r => setTimeout(r, 50));
+  }
+  console.log(`✅ Рассылка победителей конкурса завершена`);
+}
+
+function scheduleContestJobs(contest) {
+  const startDate = new Date(contest.startDate);
+  const endDate = new Date(contest.endDate);
+  const now = new Date();
+
+  // Start job
+  if (contest.status === 'upcoming' && startDate > now) {
+    schedule.scheduleJob(`contest_start_${contest._id}`, startDate, async () => {
+      try {
+        await activateContest(contest._id.toString());
+        await broadcastContestStart(contest);
+      } catch (err) {
+        console.error(`❌ Contest start job error:`, err);
+      }
+    });
+    console.log(`⏰ Запланирован старт конкурса "${contest.name}" в ${startDate.toISOString()}`);
+  }
+
+  // 24h reminder
+  const reminderDate = new Date(endDate.getTime() - 24 * 60 * 60 * 1000);
+  if (reminderDate > now) {
+    schedule.scheduleJob(`contest_remind_${contest._id}`, reminderDate, async () => {
+      try { await broadcastContestReminder(contest._id.toString()); }
+      catch (err) { console.error(`❌ Contest reminder error:`, err); }
+    });
+  }
+
+  // End job
+  if (endDate > now) {
+    schedule.scheduleJob(`contest_end_${contest._id}`, endDate, async () => {
+      try {
+        const result = await finalizeContest(contest._id.toString());
+        if (result) await broadcastContestEnd(result);
+      } catch (err) {
+        console.error(`❌ Contest end job error:`, err);
+      }
+    });
+    console.log(`⏰ Запланировано окончание конкурса "${contest.name}" в ${endDate.toISOString()}`);
+  }
+}
+
+const CONTEST_MOTIV_RU = {
+  morning: [
+    'Тот, кто совершает намаз вовремя — уже среди лидеров. Ты можешь быть первым! 🌟',
+    'Каждый джуз Корана, каждый намаз — шаг к победе. Продолжай! 📖',
+    'Рамадан — время безграничных наград. Не упусти ни одного XP! 🏆',
+    'Аллах ценит твои усилия. Продолжай — и победа будет твоей! 🤲',
+    'Сегодня у тебя есть шанс подняться в рейтинге. Действуй! ⚡',
+  ],
+  evening: [
+    'День ещё не закончен. Вечерние зикры принесут тебе 60 XP. Не упускай! 🌙',
+    'Вечерняя молитва — последний шанс набрать XP сегодня. Каждый намаз считается! 🌟',
+    'Посмотри на рейтинг — ты так близко к следующему месту! Ещё несколько действий! 💪',
+    'Ночь — время особой близости к Аллаху. Иша, витр и тахаджуд ждут тебя! ✨',
+    'Сегодня ты уже многое сделал. Заверши день с максимальным XP! 🏅',
+  ],
+};
+const CONTEST_MOTIV_KK = {
+  morning: [
+    'Намазды уақытында оқыған адам — жеңімпаздар арасында! Сен де бірінші бола аласың! 🌟',
+    'Құранның әр парасы, әр намаз — жеңіске бір қадам. Жалғастыр! 📖',
+    'Рамазан — шексіз сыйақы уақыты. Бірде-бір XP жіберіп алма! 🏆',
+    'Аллах сенің күш-жігеріңді бағалайды. Жалғастыр — жеңіс сенікі! 🤲',
+    'Бүгін рейтингте жоғары көтерілуге мүмкіндігің бар. Іске кіріс! ⚡',
+  ],
+  evening: [
+    'Күн әлі аяқталған жоқ. Кешкі зікірлер саған 60 XP әкеледі. Жіберіп алма! 🌙',
+    'Кешкі намаз — бүгін XP жинаудың соңғы мүмкіндігі. Әр намаз есептеледі! 🌟',
+    'Рейтингке қара — келесі орынға сонша жақынсың! Тағы бірнеше іс-әрекет! 💪',
+    'Түн — Аллахқа ерекше жақын болу уақыты. Иша, үтір және тахаджуд сені күтеді! ✨',
+    'Бүгін сен көп нәрсе жасадың. Күнді максималды XP-мен аяқта! 🏅',
+  ],
+};
+
+const XP_TIP_KK = '💡 *Ең көп XP:* Намаз × 5 = 250, Ораза = 200, Құран = 100, Бір пара = 150, Зікір × 2 = 60, Дос шақыру = 100, Досың төлем жасады = 400 XP';
+const XP_TIP_RU = '💡 *Топ XP:* Намаз × 5 = 250, Пост = 200, Коран = 100, Пара = 150, Зикр × 2 = 60, Пригласить друга = 100, Друг оплатил = 400 XP';
+
+async function sendDailyContestMotivation(timeOfDay) {
+  const contest = await getActiveContest();
+  if (!contest) return;
+
+  const db = getDB();
+  const paid = await db.collection('users').find({ paymentStatus: 'paid' }).toArray();
+  const phrases = { ru: CONTEST_MOTIV_RU[timeOfDay], kk: CONTEST_MOTIV_KK[timeOfDay] };
+  const dayIndex = new Date().getDate() % 5; // rotate daily
+
+  for (const user of paid) {
+    try {
+      const lang = user.language === 'kk' ? 'kk' : 'ru';
+      const { rank, xp, xpToNext } = await getUserContestRank(contest._id.toString(), user.userId);
+      const rankStr = rank
+        ? (lang === 'kk' ? `${rank}-орын · ${xp} XP` : `${rank} место · ${xp} XP`)
+        : (lang === 'kk' ? 'Белсенді болыңыз!' : 'Начните зарабатывать!');
+      const phrase = phrases[lang][dayIndex];
+      const tip = lang === 'kk' ? XP_TIP_KK : XP_TIP_RU;
+      const xpNextLine = xpToNext
+        ? (lang === 'kk' ? `⚡ Келесі орынға: ${xpToNext} XP` : `⚡ До следующего места: ${xpToNext} XP`)
+        : (lang === 'kk' ? '🥇 Сіз алдыңғы орынсыз!' : '🥇 Вы на первом месте!');
+
+      await bot.sendMessage(user.userId,
+        `🏆 *${contest.name}*\n📍 ${rankStr}\n${xpNextLine}\n\n${phrase}\n\n${tip}`,
+        { parse_mode: 'Markdown' }
+      );
+    } catch (_) {}
+    await new Promise(r => setTimeout(r, 50));
+  }
+  console.log(`✅ Ежедневные уведомления конкурса (${timeOfDay}): ${paid.length} пользователей`);
 }
 
 // ===== КОМАНДЫ БОТА =====
@@ -3653,6 +4006,19 @@ bot.onText(/\/admin_geo/, async (msg) => {
   }
 });
 
+// ─── /create_contest ────────────────────────────────────────────────────────
+bot.onText(/\/create_contest/, async (msg) => {
+  const { id: chatId, id: userId } = msg.chat;
+  const MAIN_ADMIN = parseInt(process.env.MAIN_ADMIN_ID);
+  if (userId !== MAIN_ADMIN) return;
+
+  setState(userId, 'CREATE_CONTEST_NAME');
+  bot.sendMessage(chatId,
+    '🏆 *Создание конкурса*\n\nШаг 1/5: Введите название конкурса:',
+    { parse_mode: 'Markdown' }
+  );
+});
+
 // 📊 Объяснение системы XP
 bot.onText(/\/xp/, async (msg) => {
   const userId = msg.from.id;
@@ -4146,6 +4512,46 @@ const server = http.createServer(async (req, res) => {
         return;
       } catch (error) {
         console.error('❌ API Error /leaderboard/global:', error);
+        res.statusCode = 500;
+        res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
+        return;
+      }
+    }
+
+    // ─── Contest API ────────────────────────────────────────────────────────
+    if (url.pathname === '/api/contest/current') {
+      try {
+        const userId = parseInt(url.searchParams.get('userId'));
+        const contest = await getCurrentContest();
+        if (!contest) {
+          res.statusCode = 200;
+          res.end(JSON.stringify({ success: true, data: null }));
+          return;
+        }
+        const participant = userId
+          ? await getUserContestRank(contest._id.toString(), userId)
+          : { rank: null, xp: 0, xpToNext: null };
+        res.statusCode = 200;
+        res.end(JSON.stringify({ success: true, data: { contest, participant } }));
+        return;
+      } catch (err) {
+        console.error('❌ API /api/contest/current:', err);
+        res.statusCode = 500;
+        res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
+        return;
+      }
+    }
+
+    if (url.pathname.match(/^\/api\/contest\/[a-f0-9]{24}\/leaderboard$/)) {
+      try {
+        const contestId = url.pathname.split('/')[3];
+        const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 100);
+        const leaderboard = await getContestLeaderboard(contestId, limit);
+        res.statusCode = 200;
+        res.end(JSON.stringify({ success: true, data: leaderboard }));
+        return;
+      } catch (err) {
+        console.error('❌ API /api/contest/:id/leaderboard:', err);
         res.statusCode = 500;
         res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
         return;

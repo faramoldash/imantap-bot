@@ -1,5 +1,6 @@
 // userService.js
 import { getDB } from './db.js';
+import { addContestXp } from './services/contestService.js';
 import {
   RAMADAN_START_DATE, PREPARATION_START_DATE,
   EID_AL_FITR_MS,
@@ -508,6 +509,11 @@ async function updateUserProgress(userId, progressData) {
 
     if (result.modifiedCount > 0 || xpToAdd > 0) {
       console.log(`✅ Прогресс обновлен для userId: ${userId}, начислено XP: ${xpToAdd}`);
+      if (xpToAdd > 0) {
+        addContestXp(userId, xpToAdd).catch(err =>
+          console.error(`❌ addContestXp error for ${userId}:`, err)
+        );
+      }
       const currentStreak = hasActivityToday ? newStreak : (oldUser.currentStreak || 0);
       const streakMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
       return { success: true, xpAdded: xpToAdd, streakMultiplier: xpToAdd > 0 ? streakMultiplier : 1.0, currentStreak };
@@ -723,6 +729,9 @@ async function addUserXP(userId, amount, reason = '') {
     );
     if (result.modifiedCount > 0) {
       await checkAndUnlockBadges(userId);
+      addContestXp(userId, amount).catch(err =>
+        console.error(`❌ addContestXp error for ${userId}:`, err)
+      );
       console.log(`✅ Добавлено ${amount} XP для userId ${userId}. Причина: ${reason}`);
       return true;
     }
@@ -832,6 +841,9 @@ async function addReferralXP(userId, type = 'registration', referredUserId = nul
         { userId: parseInt(userId) },
         { $inc: { xp: finalXP }, $set: { updatedAt: new Date() } }
       );
+      addContestXp(userId, finalXP).catch(err =>
+        console.error(`❌ addContestXp referral-payment error for ${userId}:`, err)
+      );
     } else {
       // Атомарно инкрементируем счётчик рефералов и invitedCount,
       // получаем новое значение после инкремента (returnDocument: 'after')
@@ -859,6 +871,9 @@ async function addReferralXP(userId, type = 'registration', referredUserId = nul
       await users.updateOne(
         { userId: parseInt(userId) },
         { $inc: { xp: finalXP } }
+      );
+      addContestXp(userId, finalXP).catch(err =>
+        console.error(`❌ addContestXp referral-reg error for ${userId}:`, err)
       );
     }
 
