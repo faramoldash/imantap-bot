@@ -5,15 +5,16 @@ import {
   RAMADAN_START_DATE, PREPARATION_START_DATE,
   EID_AL_FITR_MS,
 } from './config.js';
+import { withUserLock } from './utils/userLock.js';
 
 /**
  * ✅ ТАБЛИЦА НАЧИСЛЕНИЯ XP ЗА ЗАДАЧИ
  */
 const XP_VALUES = {
   fajr: 50, duha: 30, dhuhr: 50, asr: 50, maghrib: 50, isha: 50,
-  taraweeh: 100, tahajjud: 100, witr: 50, eidPrayer: 200,
-  fasting: 200, quranRead: 100, morningDhikr: 30, eveningDhikr: 30,
-  salawat: 20, hadith: 50, charity: 100, names99: 50, lessons: 50, book: 50,
+  taraweeh: 100, tahajjud: 50, witr: 50, eidPrayer: 200,
+  fasting: 200, quranRead: 50, morningDhikr: 30, eveningDhikr: 30,
+  salawat: 50, hadith: 30, charity: 50, names99: 50, lessons: 30, book: 30,
   singleName: 100
 };
 
@@ -32,6 +33,17 @@ const GOAL_CATEGORY_MAX_XP = {
  * Если timezone не задан — берём 'Asia/Almaty' (UTC+5, Казахстан).
  * Если timezone невалиден — тоже фолбэк на 'Asia/Almaty'.
  */
+// Проверяет, является ли dateStr (YYYY-MM-DD в таймзоне пользователя) понедельником или четвергом.
+// Используется для серверной валидации нафль-оразы вне Рамадана.
+function isMondayOrThursday(dateStr, timezone) {
+  // T12:00:00Z — полдень UTC, гарантированно попадает в нужную локальную дату
+  const dow = new Date(`${dateStr}T12:00:00Z`).toLocaleDateString('en-US', {
+    timeZone: timezone || 'Asia/Almaty',
+    weekday: 'short',
+  });
+  return dow === 'Mon' || dow === 'Thu';
+}
+
 function getTodayStr(timezone) {
   const tz = timezone || 'Asia/Almaty';
   try {
@@ -162,8 +174,13 @@ async function incrementReferralCount(promoCode) {
 
 /**
  * Обновить полный прогресс пользователя (sync endpoint)
+ * Обёрнуто в _withUserLock — конкурентные запросы одного userId выполняются строго по очереди.
  */
 async function updateUserProgress(userId, progressData) {
+  return withUserLock(userId, () => _updateUserProgressLocked(userId, progressData));
+}
+
+async function _updateUserProgressLocked(userId, progressData) {
   try {
     const db = getDB();
     const usersCollection = db.collection('users');
@@ -217,7 +234,16 @@ async function updateUserProgress(userId, progressData) {
         if (dayDateStr === todayDateStr) {
           for (const taskKey in newDayData) {
             if (newDayData[taskKey] === true && !oldDayData[taskKey] && !todayEarned.includes(taskKey)) {
-              const baseXP = XP_VALUES[taskKey] || 10;
+              let baseXP;
+              if (taskKey === 'fasting') {
+                if (!isMondayOrThursday(dayDateStr, userTimezone)) {
+                  console.log(`🛡️ Блок: ораза вне пн/чт в фазе подготовки (${dayDateStr})`);
+                  continue;
+                }
+                baseXP = 50;
+              } else {
+                baseXP = XP_VALUES[taskKey] || 10;
+              }
               const streakMultiplier = Math.min(1 + ((oldUser.currentStreak || 0) * 0.1), 3.0);
               xpToAdd += Math.floor(baseXP * streakMultiplier);
               todayEarned.push(taskKey);
@@ -236,7 +262,16 @@ async function updateUserProgress(userId, progressData) {
           const oldDayData = oldBasic[dateKey] || {};
           for (const taskKey in newDayData) {
             if (newDayData[taskKey] === true && !oldDayData[taskKey] && !todayEarned.includes(taskKey)) {
-              const baseXP = XP_VALUES[taskKey] || 10;
+              let baseXP;
+              if (taskKey === 'fasting') {
+                if (!isMondayOrThursday(dateKey, userTimezone)) {
+                  console.log(`🛡️ Блок: ораза вне пн/чт в базовой фазе (${dateKey})`);
+                  continue;
+                }
+                baseXP = 50;
+              } else {
+                baseXP = XP_VALUES[taskKey] || 10;
+              }
               const streakMultiplier = Math.min(1 + ((oldUser.currentStreak || 0) * 0.1), 3.0);
               xpToAdd += Math.floor(baseXP * streakMultiplier);
               todayEarned.push(taskKey);
@@ -639,11 +674,7 @@ async function approvePayment(userId) {
   );
 
   if (!user) return false; // Уже одобрено или пользователь не найден
-
-  if (user.referredBy) {
-    const referrer = await users.findOne({ promoCode: user.referredBy });
-    if (referrer) await addReferralXP(referrer.userId, 'payment', userId, user.name);
-  }
+  // XP за оплату начисляется в bot.js через claimPaymentBonus — не здесь.
   return true;
 }
 
@@ -881,11 +912,36 @@ async function addReferralXP(userId, type = 'registration', referredUserId = nul
   } catch (error) { console.error('❌ addReferralXP:', error); return { success: false, reason: 'error' }; }
 }
 
+/**
+ * Атомарно выставляет флаг referralBonusGiven.
+ * Возвращает true только если флаг только что выставлен нами — XP можно начислять.
+ * Повторный вызов вернёт false — гарантия от race condition и двойного начисления.
+ */
+async function claimReferralBonus(userId) {
+  const result = await getDB().collection('users').findOneAndUpdate(
+    { userId: parseInt(userId), referralBonusGiven: { $ne: true } },
+    { $set: { referralBonusGiven: true, updatedAt: new Date() } }
+  );
+  return result !== null;
+}
+
+/**
+ * Атомарно выставляет флаг paymentBonusGiven.
+ * Возвращает true только если флаг только что выставлен нами — XP можно начислять.
+ */
+async function claimPaymentBonus(userId) {
+  const result = await getDB().collection('users').findOneAndUpdate(
+    { userId: parseInt(userId), paymentBonusGiven: { $ne: true } },
+    { $set: { paymentBonusGiven: true, updatedAt: new Date() } }
+  );
+  return result !== null;
+}
+
 export {
   getOrCreateUser, getUserById, getUserByPromoCode, incrementReferralCount,
   updateUserProgress, getUserFullData, updateUserOnboarding, checkPromoCode,
   updatePaymentStatus, approvePayment, rejectPayment, getUserAccess,
   getPendingPayments, checkDemoExpiration, addUserXP, getGlobalLeaderboard,
   getUserRank, getFriendsLeaderboard, getCountries, getCities,
-  getFilteredLeaderboard, addReferralXP
+  getFilteredLeaderboard, addReferralXP, claimReferralBonus, claimPaymentBonus
 };
