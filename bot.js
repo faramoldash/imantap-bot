@@ -4291,6 +4291,18 @@ const server = http.createServer(async (req, res) => {
           const progressData = JSON.parse(body);
           const result = await updateUserProgress(userId, progressData);
 
+          if (result?.conflict) {
+            const updatedData = await getUserFullData(userId);
+            res.statusCode = 409;
+            res.end(JSON.stringify({
+              success: false,
+              conflict: true,
+              data: updatedData,
+              syncVersion: result.syncVersion,
+            }));
+            return;
+          }
+
           if (result && result.success) {
             console.log(`✅ Синк для ${userId}, начислено: ${result.xpAdded} XP`);
             const updatedData = await getUserFullData(userId);

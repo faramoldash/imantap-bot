@@ -55,6 +55,10 @@ export async function createIndexes() {
     // ✅ Основные индексы
     await users.createIndex({ userId: 1 }, { unique: true });
     console.log('✅ Index: userId');
+
+    // Версия защищает sync от перезаписи данных устаревшим клиентом.
+    await users.createIndex({ userId: 1, syncVersion: 1 });
+    console.log('✅ Composite Index: userId + syncVersion');
     
     await users.createIndex({ promoCode: 1 }, { unique: true });
     console.log('✅ Index: promoCode');

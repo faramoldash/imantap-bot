@@ -121,6 +121,7 @@ async function getOrCreateUser(userId, username = null) {
       tasbeehRecords: {},
       earnedTasbeehXp: {},
       tasbeehTotals: {},
+      syncVersion: 0,
       onboardingCompleted: false,
       createdAt: new Date(),
       updatedAt: new Date()
@@ -187,6 +188,16 @@ async function _updateUserProgressLocked(userId, progressData) {
 
     const oldUser = await usersCollection.findOne({ userId: parseInt(userId) });
     if (!oldUser) { console.error('❌ Пользователь не найден:', userId); return false; }
+
+    // Клиент отправляет версию последней полученной копии. Если за это время
+    // данные уже менялись на другом устройстве, не затираем их целым snapshot.
+    const currentSyncVersion = Number.isInteger(oldUser.syncVersion) ? oldUser.syncVersion : 0;
+    const expectedSyncVersion = Number.isInteger(progressData.syncVersion)
+      ? progressData.syncVersion
+      : null;
+    if (expectedSyncVersion !== null && expectedSyncVersion !== currentSyncVersion) {
+      return { success: false, conflict: true, syncVersion: currentSyncVersion };
+    }
 
     // FIX #B3: используем безопасную функцию getTodayStr
     const userTimezone = oldUser.location?.timezone || 'Asia/Almaty';
@@ -537,10 +548,19 @@ async function _updateUserProgressLocked(userId, progressData) {
       updateFields.lastActiveDate = todayDateStr;
     }
 
+    const versionFilter = currentSyncVersion === 0
+      ? { $or: [{ syncVersion: 0 }, { syncVersion: { $exists: false } }] }
+      : { syncVersion: currentSyncVersion };
     const result = await usersCollection.updateOne(
-      { userId: parseInt(userId) },
-      { $set: updateFields }
+      { userId: parseInt(userId), ...versionFilter },
+      { $set: updateFields, $inc: { syncVersion: 1 } }
     );
+
+    // Защита на случай обновления документа другим процессом между read и write.
+    if (result.matchedCount === 0) {
+      const latest = await usersCollection.findOne({ userId: parseInt(userId) }, { projection: { syncVersion: 1 } });
+      return { success: false, conflict: true, syncVersion: latest?.syncVersion || 0 };
+    }
 
     if (result.modifiedCount > 0 || xpToAdd > 0) {
       console.log(`✅ Прогресс обновлен для userId: ${userId}, начислено XP: ${xpToAdd}`);
@@ -551,9 +571,9 @@ async function _updateUserProgressLocked(userId, progressData) {
       }
       const currentStreak = hasActivityToday ? newStreak : (oldUser.currentStreak || 0);
       const streakMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
-      return { success: true, xpAdded: xpToAdd, streakMultiplier: xpToAdd > 0 ? streakMultiplier : 1.0, currentStreak };
+      return { success: true, xpAdded: xpToAdd, streakMultiplier: xpToAdd > 0 ? streakMultiplier : 1.0, currentStreak, syncVersion: currentSyncVersion + 1 };
     }
-    return { success: true, xpAdded: 0, streakMultiplier: 1.0, currentStreak: oldUser.currentStreak || 0 };
+    return { success: true, xpAdded: 0, streakMultiplier: 1.0, currentStreak: oldUser.currentStreak || 0, syncVersion: currentSyncVersion + 1 };
   } catch (error) {
     console.error('❌ updateUserProgress ошибка:', error);
     throw error;
@@ -571,6 +591,7 @@ async function getUserFullData(userId) {
 
     return {
       userId: user.userId,
+      syncVersion: Number.isInteger(user.syncVersion) ? user.syncVersion : 0,
       username: user.username,
       promoCode: user.promoCode,
       invitedCount: user.invitedCount,
