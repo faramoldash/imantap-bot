@@ -71,6 +71,7 @@ import {
   checkMissedContests, getUpcomingAndActiveContests, getContestById,
 } from './services/contestService.js';
 import { getCityByCoordinates, getKazakhstanCities } from './utils/cityMapping.js';
+import { verifyTelegramInitData } from './utils/telegramAuth.js';
 
 // Экранирование специальных символов для Markdown
 function escapeMarkdown(text) {
@@ -4163,7 +4164,7 @@ const server = http.createServer(async (req, res) => {
   // OPTIONS preflight
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Telegram-Init-Data');
     res.statusCode = 200;
     res.end();
     return;
@@ -4180,6 +4181,27 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // Every Mini App request is authenticated with Telegram's signed initData.
+    // userId from URL/body is only a routing value and must match this identity.
+    const isProtectedApi = url.pathname.startsWith('/api/') || url.pathname === '/shawwal-fast';
+    const maxInitDataAgeSeconds = Number(process.env.TELEGRAM_INIT_DATA_MAX_AGE_SECONDS) || 24 * 60 * 60;
+    const telegramAuth = isProtectedApi
+      ? verifyTelegramInitData(req.headers['x-telegram-init-data'], process.env.BOT_TOKEN, maxInitDataAgeSeconds)
+      : null;
+    if (isProtectedApi && !telegramAuth) {
+      res.statusCode = 401;
+      res.end(JSON.stringify({ success: false, error: 'Unauthorized Telegram Mini App request' }));
+      return;
+    }
+    const authUserId = telegramAuth?.userId;
+
+    const requireCurrentUser = (requestedUserId) => {
+      if (Number(requestedUserId) === authUserId) return true;
+      res.statusCode = 403;
+      res.end(JSON.stringify({ success: false, error: 'You can only access your own data' }));
+      return false;
+    };
+
     // ✅ API: /api/check-access (для фронтенда miniapp)
     if (url.pathname === '/api/check-access') {
       const userId = parseInt(url.searchParams.get('userId'));
@@ -4189,6 +4211,7 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ success: false, error: 'userId required' }));
         return;
       }
+      if (!requireCurrentUser(userId)) return;
       
       try {
         const access = await getUserAccess(userId);
@@ -4220,6 +4243,7 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ success: false, error: 'Invalid userId' }));
         return;
       }
+      if (!requireCurrentUser(userId)) return;
 
       try {
         const access = await getUserAccess(userId);
@@ -4248,6 +4272,7 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ success: false, error: 'Invalid userId' }));
         return;
       }
+      if (!requireCurrentUser(userId)) return;
 
       // 🔒 ЗАЩИТА: не более 10 запросов в минуту на одного юзера
       if (!checkRateLimit(userId, 10)) {
@@ -4297,6 +4322,7 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ success: false, error: 'userId required' }));
         return;
       }
+      if (!requireCurrentUser(userId)) return;
 
       const userData = await getUserFullData(userId);
       res.statusCode = 200;
@@ -4313,6 +4339,7 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ success: false, error: 'userId required' }));
         return;
       }
+      if (!requireCurrentUser(userId)) return;
       
       try {
         const userData = await getUserFullData(userId);
@@ -4338,6 +4365,7 @@ const server = http.createServer(async (req, res) => {
           res.end(JSON.stringify({ success: false, error: 'userId required' }));
           return;
         }
+        if (!requireCurrentUser(userId)) return;
         
         const friends = await getFriendsLeaderboard(userId, limit);
         
@@ -4463,7 +4491,9 @@ const server = http.createServer(async (req, res) => {
     // ─── Contest API ────────────────────────────────────────────────────────
     if (url.pathname === '/api/contest/current') {
       try {
-        const userId = parseInt(url.searchParams.get('userId'));
+        const requestedUserId = parseInt(url.searchParams.get('userId'));
+        if (requestedUserId && !requireCurrentUser(requestedUserId)) return;
+        const userId = authUserId;
         const contest = await getCurrentContest();
         if (!contest) {
           res.statusCode = 200;
@@ -4507,7 +4537,8 @@ const server = http.createServer(async (req, res) => {
       
       req.on('end', async () => {
         try {
-          const { userId, name, description } = JSON.parse(body);
+          const { name, description } = JSON.parse(body);
+          const userId = authUserId;
           
           const result = await createCircle(userId, name, description);
           
@@ -4527,6 +4558,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname.match(/^\/api\/circles\/user\/\d+$/)) {
       try {
         const userId = url.pathname.split('/')[4];
+        if (!requireCurrentUser(userId)) return;
         
         const circles = await getUserCircles(userId);
         
@@ -4552,6 +4584,7 @@ const server = http.createServer(async (req, res) => {
           res.end(JSON.stringify({ success: false, error: 'userId required' }));
           return;
         }
+        if (!requireCurrentUser(userId)) return;
         
         const details = await getCircleDetails(circleId, userId);
         
@@ -4573,7 +4606,8 @@ const server = http.createServer(async (req, res) => {
       
       req.on('end', async () => {
         try {
-          const { circleId, inviterId, targetUsername } = JSON.parse(body);
+          const { circleId, targetUsername } = JSON.parse(body);
+          const inviterId = authUserId;
           
           console.log('🔍 INVITE REQUEST:', {
             circleId,
@@ -4633,7 +4667,8 @@ const server = http.createServer(async (req, res) => {
       
       req.on('end', async () => {
         try {
-          const { circleId, userId } = JSON.parse(body);
+          const { circleId } = JSON.parse(body);
+          const userId = authUserId;
           
           const result = await acceptInvite(circleId, userId);
 
@@ -4693,7 +4728,8 @@ const server = http.createServer(async (req, res) => {
       
       req.on('end', async () => {
         try {
-          const { circleId, userId } = JSON.parse(body);
+          const { circleId } = JSON.parse(body);
+          const userId = authUserId;
           
           console.log('🔍 LEAVE REQUEST:', { circleId, userId });
           
@@ -4755,7 +4791,8 @@ const server = http.createServer(async (req, res) => {
       
       req.on('end', async () => {
         try {
-          const { circleId, ownerId, targetUserId } = JSON.parse(body);
+          const { circleId, targetUserId } = JSON.parse(body);
+          const ownerId = authUserId;
           
           console.log('🔍 REMOVE MEMBER REQUEST:', { circleId, ownerId, targetUserId });
           
@@ -4805,7 +4842,8 @@ const server = http.createServer(async (req, res) => {
       
       req.on('end', async () => {
         try {
-          const { circleId, ownerId } = JSON.parse(body);
+          const { circleId } = JSON.parse(body);
+          const ownerId = authUserId;
           
           console.log('🔍 DELETE CIRCLE REQUEST:', { circleId, ownerId });
           
@@ -4830,7 +4868,8 @@ const server = http.createServer(async (req, res) => {
       
       req.on('end', async () => {
         try {
-          const { circleId, userId } = JSON.parse(body);
+          const { circleId } = JSON.parse(body);
+          const userId = authUserId;
           
           const result = await declineInvite(circleId, userId);
           
@@ -4853,7 +4892,8 @@ const server = http.createServer(async (req, res) => {
       
       req.on('end', async () => {
         try {
-          const { inviteCode, userId } = JSON.parse(body);
+          const { inviteCode } = JSON.parse(body);
+          const userId = authUserId;
           
           console.log('🔗 JOIN REQUEST:', { inviteCode, userId });
           
@@ -4906,12 +4946,8 @@ const server = http.createServer(async (req, res) => {
       req.on('data', chunk => body += chunk);
       req.on('end', async () => {
         try {
-          const { userId, date } = JSON.parse(body);
-
-          if (!userId) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ error: 'userId required' }));
-          }
+          const { date } = JSON.parse(body);
+          const userId = authUserId;
 
           const db = getDB();
           const users = db.collection('users');
