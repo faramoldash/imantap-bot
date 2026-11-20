@@ -7,7 +7,7 @@ import geoTz from 'geo-tz';
 import { connectDB, getDB, createIndexes } from './db.js';
 import {
   RAMADAN_START_DATE, EID_AL_FITR_DATE,
-  SHAWWAL_START_DATE, SHAWWAL_END_DATE,
+  SHAWWAL_START_DATE, SHAWWAL_END_DATE, SHAWWAL_FASTS,
 } from './config.js';
 import {
   getPrayerTimesByCity,
@@ -460,7 +460,7 @@ async function sendPersonalizedRamadanReminder(type) {
         // Определяем период
         const isRamadan = todayStr >= RAMADAN_START_DATE && todayStr < EID_AL_FITR_DATE;
         const isShawwal = todayStr >= SHAWWAL_START_DATE && todayStr <= SHAWWAL_END_DATE;
-        const shawwalDone = (user.shawwalFasts || 0) >= 6;
+        const shawwalDone = (user.shawwalFasts || 0) >= SHAWWAL_FASTS;
 
         // Не сезон или Шаввал уже выполнен — пропускаем этого пользователя
         if (!isRamadan && !isShawwal) continue;
@@ -830,21 +830,42 @@ bot.on('callback_query', async (query) => {
       // Читаем только timezone и язык — они нужны до обновления
       const user = await users.findOne({ userId }, { projection: { 'location.timezone': 1, language: 1 } });
 
-      const userTZ = user?.location?.timezone || 'Asia/Almaty';
+      const userTZ = resolveSafeTimezone(user?.location?.timezone);
       const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: userTZ });
       const lang = user?.language || 'kk';
 
+      if (todayStr < SHAWWAL_START_DATE || todayStr > SHAWWAL_END_DATE) {
+        await bot.answerCallbackQuery(query.id, {
+          text: lang === 'kk' ? 'Шәууал оразасы кезеңі аяқталды' : 'Период поста Шавваля завершён',
+          show_alert: false
+        });
+        return;
+      }
+
       // Атомарное обновление: условие shawwalDates: { $ne: todayStr } в фильтре
       // гарантирует, что два одновременных запроса не запишут дату дважды.
-      // $addToSet + $inc исключают зависимость от прочитанного состояния.
-      const updated = await users.findOneAndUpdate(
-        { userId, shawwalDates: { $ne: todayStr }, shawwalFasts: { $lt: 6 } },
+      // $or покрывает пользователей, у которых поле shawwalFasts ещё отсутствует или null.
+      const atomicResult = await users.findOneAndUpdate(
+        {
+          userId,
+          shawwalDates: { $ne: todayStr },
+          $or: [
+            { shawwalFasts: { $lt: SHAWWAL_FASTS } },
+            { shawwalFasts: { $exists: false } },
+            { shawwalFasts: null },
+          ],
+        },
         {
           $inc: { shawwalFasts: 1, xp: 60 },
           $addToSet: { shawwalDates: todayStr }
         },
-        { returnDocument: 'after' }
+        { returnDocument: 'after', includeResultMetadata: false }
       );
+
+      const updated =
+        atomicResult && typeof atomicResult === 'object' && 'value' in atomicResult
+          ? atomicResult.value
+          : atomicResult;
 
       if (!updated) {
         // Документ не нашёлся: дата уже есть ИЛИ уже 6/6
@@ -857,18 +878,18 @@ bot.on('callback_query', async (query) => {
 
       const newCount = updated.shawwalFasts;
 
-      console.log(`🌙 +60 XP Shawwal fast: User ${userId} → ${newCount}/6`);
+      console.log(`🌙 +60 XP Shawwal fast: User ${userId} → ${newCount}/${SHAWWAL_FASTS}`);
 
       await bot.answerCallbackQuery(query.id, {
-        text: lang === 'kk' ? `✅ Белгіленді! ${newCount}/6 (+60 XP)` : `✅ Отмечено! ${newCount}/6 (+60 XP)`,
+        text: lang === 'kk' ? `✅ Белгіленді! ${newCount}/${SHAWWAL_FASTS} (+60 XP)` : `✅ Отмечено! ${newCount}/${SHAWWAL_FASTS} (+60 XP)`,
         show_alert: false
       });
 
       // 🎉 Поздравление если все 6 выполнены
-      if (newCount === 6) {
+      if (newCount === SHAWWAL_FASTS) {
         const msg = lang === 'kk'
-          ? `🎉 *МашаАллаһ! Шаууал оразасын аяқтадыңыз!*\n\n6 күн ораза ұстадыңыз — бұл толық жыл оразасына тең сауап! 🤲\n\nАлла Тағала барлық амалдарыңызды қабыл етсін! 🌙`
-          : `🎉 *МашаАллаh! Вы завершили пост Шавваля!*\n\n6 дней поста — награда, равная году поста! 🤲\n\nПусть Аллах примет все ваши деяния! 🌙`;
+          ? `🎉 *МашаАллаһ! Шаууал оразасын аяқтадыңыз!*\n\n${SHAWWAL_FASTS} күн ораза ұстадыңыз — бұл толық жыл оразасына тең сауап! 🤲\n\nАлла Тағала барлық амалдарыңызды қабыл етсін! 🌙`
+          : `🎉 *МашаАллаh! Вы завершили пост Шавваля!*\n\n${SHAWWAL_FASTS} дней поста — награда, равная году поста! 🤲\n\nПусть Аллах примет все ваши деяния! 🌙`;
         await bot.sendMessage(userId, msg, { parse_mode: 'Markdown' });
       }
 

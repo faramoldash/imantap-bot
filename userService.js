@@ -3,7 +3,7 @@ import { getDB } from './db.js';
 import { addContestXp } from './services/contestService.js';
 import {
   RAMADAN_START_DATE, PREPARATION_START_DATE,
-  EID_AL_FITR_MS,
+  EID_AL_FITR_DATE, EID_AL_FITR_MS,
 } from './config.js';
 import { withUserLock } from './utils/userLock.js';
 
@@ -72,15 +72,27 @@ function isValidDailyTaskKey(taskKey) {
  * Если timezone не задан — берём 'Asia/Almaty' (UTC+5, Казахстан).
  * Если timezone невалиден — тоже фолбэк на 'Asia/Almaty'.
  */
-// Проверяет, является ли dateStr (YYYY-MM-DD в таймзоне пользователя) понедельником или четвергом.
+// Проверяет, является ли календарная дата dateStr (YYYY-MM-DD) понедельником или четвергом.
 // Используется для серверной валидации нафль-оразы вне Рамадана.
-function isMondayOrThursday(dateStr, timezone) {
-  // T12:00:00Z — полдень UTC, гарантированно попадает в нужную локальную дату
-  const dow = new Date(`${dateStr}T12:00:00Z`).toLocaleDateString('en-US', {
-    timeZone: timezone || 'Asia/Almaty',
-    weekday: 'short',
-  });
-  return dow === 'Mon' || dow === 'Thu';
+// День недели календарной даты не зависит от часового пояса, поэтому считаем по UTC-календарю
+// без риска сдвига в UTC+13/+14 или RangeError при невалидной таймзоне.
+function isMondayOrThursday(dateStr, _timezone) {
+  if (typeof dateStr !== 'string') return false;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr.trim());
+  if (!m) return false;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const utcDate = new Date(Date.UTC(year, month - 1, day));
+  if (
+    utcDate.getUTCFullYear() !== year ||
+    utcDate.getUTCMonth() !== month - 1 ||
+    utcDate.getUTCDate() !== day
+  ) {
+    return false;
+  }
+  const dow = utcDate.getUTCDay();
+  return dow === 1 || dow === 4;
 }
 
 function getTodayStr(timezone, nowDate = new Date()) {
@@ -318,8 +330,8 @@ async function _updateUserProgressLocked(userId, progressData, deps = {}) {
             if (newDayData[taskKey] === true && !oldDayData[taskKey] && !todayEarned.includes(taskKey)) {
               let baseXP;
               if (taskKey === 'fasting') {
-                if (!isMondayOrThursday(dateKey, userTimezone)) {
-                  console.log(`🛡️ Блок: ораза вне пн/чт в базовой фазе (${dateKey})`);
+                if (dateKey === EID_AL_FITR_DATE || !isMondayOrThursday(dateKey, userTimezone)) {
+                  console.log(`🛡️ Блок: ораза вне пн/чт или в день Айта в базовой фазе (${dateKey})`);
                   continue;
                 }
                 baseXP = 50;
@@ -1053,7 +1065,7 @@ async function claimPaymentBonus(userId) {
 
 export {
   XP_VALUES, GOAL_CATEGORY_MAX_XP, LEGACY_GOAL_CATEGORY_MAP, TASBEEH_XP,
-  normalizeGoalCategoryId,
+  normalizeGoalCategoryId, isMondayOrThursday,
   getOrCreateUser, getUserById, getUserByPromoCode, incrementReferralCount,
   updateUserProgress, getUserFullData, updateUserOnboarding, checkPromoCode,
   updatePaymentStatus, approvePayment, rejectPayment, getUserAccess,

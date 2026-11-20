@@ -11,7 +11,7 @@ import {
 import {
   getCurrentContest, getContestLeaderboard, getUserContestRank,
 } from './services/contestService.js';
-import { SHAWWAL_START_DATE, SHAWWAL_END_DATE, getMiniAppDeepLink } from './config.js';
+import { SHAWWAL_START_DATE, SHAWWAL_END_DATE, SHAWWAL_FASTS, getMiniAppDeepLink } from './config.js';
 import { getKazakhstanCities } from './utils/cityMapping.js';
 import { verifyTelegramInitData } from './utils/telegramAuth.js';
 
@@ -122,6 +122,8 @@ export function createApiServer({
   botToken,
   nodeEnv = process.env.NODE_ENV,
   extraOrigins = process.env.CORS_ALLOWED_ORIGINS,
+  getDb = getDB,
+  nowFn = () => new Date(),
 } = {}) {
   const allowedOrigins = buildAllowedOrigins({ miniAppUrl, nodeEnv, extraOrigins });
 
@@ -940,71 +942,121 @@ export function createApiServer({
       req.on('data', chunk => body += chunk);
       req.on('end', async () => {
         try {
-          const { date } = JSON.parse(body);
-          const userId = authUserId;
+          let parsed = {};
+          if (body && body.trim()) {
+            try {
+              parsed = JSON.parse(body);
+            } catch {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({ error: 'Invalid JSON body' }));
+            }
+          }
+          const rawDate = parsed?.date;
+          const userId = Number(authUserId);
 
-          const db = getDB();
+          if (rawDate !== undefined && rawDate !== null && rawDate !== '') {
+            const m = typeof rawDate === 'string' ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(rawDate.trim()) : null;
+            if (!m) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({ error: 'Invalid date format' }));
+            }
+            const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+            const check = new Date(Date.UTC(y, mo - 1, d));
+            if (check.getUTCFullYear() !== y || check.getUTCMonth() !== mo - 1 || check.getUTCDate() !== d) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({ error: 'Invalid calendar date' }));
+            }
+          }
+
+          const db = getDb();
           const users = db.collection('users');
-          const user = await users.findOne({ userId: Number(userId) });
+          const user = await users.findOne({ userId });
 
           if (!user) {
             res.writeHead(404, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ error: 'User not found' }));
           }
 
-          // ✅ userTZ объявляем ДО использования
+          // ✅ userTZ с безопасным фолбэком на Asia/Almaty
           const userTZ = user.location?.timezone || 'Asia/Almaty';
-          const todayStr = date || new Date().toLocaleDateString('en-CA', { timeZone: userTZ });
+          let userTodayStr;
+          try {
+            userTodayStr = nowFn().toLocaleDateString('en-CA', { timeZone: userTZ });
+          } catch {
+            userTodayStr = nowFn().toLocaleDateString('en-CA', { timeZone: 'Asia/Almaty' });
+          }
+          const targetDate = (typeof rawDate === 'string' && rawDate.trim()) ? rawDate.trim() : userTodayStr;
 
-          if (todayStr < SHAWWAL_START_DATE || todayStr > SHAWWAL_END_DATE) {
+          if (targetDate < SHAWWAL_START_DATE || targetDate > SHAWWAL_END_DATE) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             return res.end(JSON.stringify({ error: 'Not shawwal period' }));
           }
 
-          const shawwalDates = user.shawwalDates || [];
-          const currentFasts = user.shawwalFasts || 0;
-
-          // ✅ Уже отмечен
-          if (shawwalDates.includes(todayStr)) {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ 
-              success: true, 
-              alreadyMarked: true,
-              shawwalFasts: currentFasts,
-              shawwalDates: shawwalDates
-            }));
+          if (targetDate > userTodayStr) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ error: 'Cannot mark future date' }));
           }
 
-          // ✅ Уже 6
-          if (currentFasts >= 6) {
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            return res.end(JSON.stringify({ 
-              success: true, 
-              shawwalFasts: 6, 
-              shawwalDates: shawwalDates,
-              completed: true 
-            }));
-          }
-
-          const newCount = currentFasts + 1;
-          const newDates = [...shawwalDates, todayStr];
-
-          await users.updateOne(
-            { userId: Number(userId) },
-            { 
-              $set: { shawwalFasts: newCount },
-              $inc: { xp: 60 },
-              $push: { shawwalDates: todayStr }
-            }
+          // Атомарное обновление защищает от гонки (double-tap / бот + mini app)
+          // и корректно обрабатывает пользователей без поля shawwalFasts в документе.
+          const atomicResult = await users.findOneAndUpdate(
+            {
+              userId,
+              shawwalDates: { $ne: targetDate },
+              $or: [
+                { shawwalFasts: { $lt: SHAWWAL_FASTS } },
+                { shawwalFasts: { $exists: false } },
+                { shawwalFasts: null },
+              ],
+            },
+            {
+              $inc: { shawwalFasts: 1, xp: 60 },
+              $addToSet: { shawwalDates: targetDate },
+            },
+            { returnDocument: 'after', includeResultMetadata: false }
           );
 
-          console.log(`⭐ +60 XP Shawwal → User ${userId} (${newCount}/6) [${todayStr}]`);
+          const updatedUser =
+            atomicResult && typeof atomicResult === 'object' && 'value' in atomicResult
+              ? atomicResult.value
+              : atomicResult;
 
-          if (newCount === 6) {
-            const lang = user.language || 'kk';
+          if (!updatedUser) {
+            const freshUser = await users.findOne({ userId }) || user;
+            const freshDates = Array.isArray(freshUser.shawwalDates) ? freshUser.shawwalDates : [];
+            const freshFasts = freshUser.shawwalFasts || 0;
+
+            if (freshDates.includes(targetDate)) {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              return res.end(JSON.stringify({
+                success: true,
+                alreadyMarked: true,
+                shawwalFasts: freshFasts,
+                shawwalDates: freshDates,
+                completed: freshFasts >= SHAWWAL_FASTS,
+              }));
+            }
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({
+              success: true,
+              alreadyMarked: false,
+              shawwalFasts: freshFasts,
+              shawwalDates: freshDates,
+              completed: freshFasts >= SHAWWAL_FASTS,
+            }));
+          }
+
+          const newCount = updatedUser.shawwalFasts;
+          const newDates = Array.isArray(updatedUser.shawwalDates) ? updatedUser.shawwalDates : [targetDate];
+
+          console.log(`⭐ +60 XP Shawwal → User ${userId} (${newCount}/${SHAWWAL_FASTS}) [${targetDate}]`);
+
+          if (newCount === SHAWWAL_FASTS) {
+            const lang = updatedUser.language || user.language || 'kk';
             const congratsMsg = lang === 'kk'
-              ? `🎉 *МашаАллаһ! Шәууал оразасын аяқтадыңыз!*\n\n6 күн ораза ұстадыңыз — бұл 1 жылдық оразаға тең сауап! 🤲\n\nАлла Тағала барлық амалдарыңызды қабыл етсін! 🌙`
-              : `🎉 *МашаАллаh! Вы завершили пост Шавваля!*\n\n6 дней поста — награда, равная году поста! 🤲\n\nПусть Аллах примет все ваши деяния! 🌙`;
+              ? `🎉 *МашаАллаһ! Шәууал оразасын аяқтадыңыз!*\n\n${SHAWWAL_FASTS} күн ораза ұстадыңыз — бұл 1 жылдық оразаға тең сауап! 🤲\n\nАлла Тағала барлық амалдарыңызды қабыл етсін! 🌙`
+              : `🎉 *МашаАллаh! Вы завершили пост Шавваля!*\n\n${SHAWWAL_FASTS} дней поста — награда, равная году поста! 🤲\n\nПусть Аллах примет все ваши деяния! 🌙`;
             try {
               await bot.sendMessage(user.userId, congratsMsg, { parse_mode: 'Markdown' });
             } catch (e) {
@@ -1012,14 +1064,15 @@ export function createApiServer({
             }
           }
 
-          // ✅ Возвращаем shawwalDates для синхронизации фронта
+          // ✅ Возвращаем shawwalDates и xp для синхронизации фронта
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ 
-            success: true, 
+          res.end(JSON.stringify({
+            success: true,
             alreadyMarked: false,
             shawwalFasts: newCount,
             shawwalDates: newDates,
-            completed: newCount === 6
+            xp: updatedUser.xp,
+            completed: newCount >= SHAWWAL_FASTS,
           }));
 
         } catch (e) {
