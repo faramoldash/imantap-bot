@@ -9,7 +9,13 @@ import {
   RAMADAN_START_DATE, EID_AL_FITR_DATE,
   SHAWWAL_START_DATE, SHAWWAL_END_DATE,
 } from './config.js';
-import { getPrayerTimesByCity, calculateReminderTime, updateUserPrayerTimes } from './prayerTimesService.js';
+import {
+  getPrayerTimesByCity,
+  calculateReminderTime,
+  updateUserPrayerTimes,
+  resolveSafeTimezone,
+  getLocalTimeParts,
+} from './prayerTimesService.js';
 import {
   getOrCreateUser,
   getUserById,
@@ -50,7 +56,7 @@ import {
 } from './services/contestService.js';
 import { getCityByCoordinates } from './utils/cityMapping.js';
 import { startApiServer } from './apiServer.js';
-import { registerCoreSchedulers } from './schedulerService.js';
+import { registerCoreSchedulers, isTelegramBlockedError } from './schedulerService.js';
 
 // Экранирование специальных символов для Markdown
 function escapeMarkdown(text) {
@@ -351,37 +357,34 @@ async function sendPersonalizedRamadanReminder(type) {
     
     let sentCount = 0;
     let checkedCount = 0;
+    const now = new Date();
     
     for (const user of activeUsers) {
+      let claimedToday = false;
+      const reminderField = `lastReminderSent.${type}`;
       try {
         const prayerTimes = user.prayerTimes;
         const minutesBefore = 15; // За 15 минут до намаза
-        const lang = user.language || 'kk';
+        const lang = user.language === 'ru' ? 'ru' : 'kk';
         
-        // ✅ ИСПРАВЛЕНО: Правильный расчёт локального времени
-        const userTimezone = user.location?.timezone || 'Asia/Almaty';
-        const now = new Date();
-        
-        // Форматируем время в timezone пользователя и парсим компоненты
-        const timeString = now.toLocaleString('en-US', { 
-          timeZone: userTimezone,
-          hour12: false,
-          hour: '2-digit',
-          minute: '2-digit'
-        });
-        
-        const [currentHour, currentMinute] = timeString.split(':').map(Number);
+        // ✅ Безопасный расчёт локального времени (защита от невалидной TZ и бага "24:xx")
+        const userTimezone = resolveSafeTimezone(user.location?.timezone);
+        const {
+          hour: currentHour,
+          minute: currentMinute,
+          dateStr: todayStr,
+        } = getLocalTimeParts(now, userTimezone);
         
         checkedCount++;
         
         let shouldSend = false;
         let prayerTime = '';
-        let iftarTime = '';   // ← добавить
+        let iftarTime = '';
         let suhurTime = '';
         
         if (type === 'suhur' && prayerTimes.fajr) {
           const reminderTime = calculateReminderTime(prayerTimes.fajr, minutesBefore);
-          if (reminderTime.hour === currentHour && reminderTime.minute === currentMinute) {
+          if (reminderTime && reminderTime.hour === currentHour && reminderTime.minute === currentMinute) {
             shouldSend = true;
             prayerTime = prayerTimes.fajr;       // время бекіту (fajr)
             iftarTime = prayerTimes.maghrib;     // время ауыз ашу (для инфо)
@@ -390,7 +393,7 @@ async function sendPersonalizedRamadanReminder(type) {
 
         if (type === 'iftar' && prayerTimes.maghrib) {
           const reminderTime = calculateReminderTime(prayerTimes.maghrib, minutesBefore);
-          if (reminderTime.hour === currentHour && reminderTime.minute === currentMinute) {
+          if (reminderTime && reminderTime.hour === currentHour && reminderTime.minute === currentMinute) {
             shouldSend = true;
             prayerTime = prayerTimes.maghrib;    // время ауыз ашу (maghrib)
             suhurTime = prayerTimes.fajr;        // время бекіту (для инфо)
@@ -399,92 +402,119 @@ async function sendPersonalizedRamadanReminder(type) {
 
         if (type === 'prayer_times' && prayerTimes.fajr) {
           const reminderTime = calculateReminderTime(prayerTimes.fajr, 10);
-          if (reminderTime.hour === currentHour && reminderTime.minute === currentMinute) {
+          if (reminderTime && reminderTime.hour === currentHour && reminderTime.minute === currentMinute) {
             shouldSend = true;
           }
         }
 
-        if (shouldSend) {
-          // Уведомление о временах намаза — отправляется всегда, без привязки к сезону
-          if (type === 'prayer_times') {
-            const city = user.location?.city || (lang === 'kk' ? 'Белгісіз қала' : 'Город не указан');
-            const pt = user.prayerTimes;
-            const message = PRAYER_TIMES_MESSAGE[lang](
-              city,
-              pt.fajr    || '—',
-              pt.sunrise || '—',
-              pt.dhuhr   || '—',
-              pt.asr     || '—',
-              pt.maghrib || '—',
-              pt.isha    || '—'
-            );
-            try {
-              await bot.sendMessage(user.userId, message, { parse_mode: 'Markdown' });
-              console.log(`📨 🕌 PrayerTimes → User ${user.userId} (${userTimezone})`);
-              sentCount++;
-              await new Promise(resolve => setTimeout(resolve, 100));
-            } catch (sendError) {
-              if (sendError?.response?.body?.error_code === 403) {
-                await users.updateOne(
-                  { userId: user.userId },
-                  { $set: { 'notificationSettings.ramadanReminders': false } }
-                );
-                console.log(`🚫 User ${user.userId} заблокировал бота — уведомления отключены`);
-              } else {
-                console.error(`❌ Ошибка отправки ${user.userId}:`, sendError.message);
-              }
-            }
-            continue;
-          }
+        if (!shouldSend) continue;
 
-          // Определяем период
-          const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: userTimezone });
+        // Защита от повторной отправки одного и того же напоминания за этот локальный день
+        if (user.lastReminderSent?.[type] === todayStr) continue;
 
-          const isRamadan = todayStr >= RAMADAN_START_DATE && todayStr < EID_AL_FITR_DATE;
-          const isShawwal = todayStr >= SHAWWAL_START_DATE && todayStr <= SHAWWAL_END_DATE;
-          const shawwalDone = (user.shawwalFasts || 0) >= 6;
+        // Уведомление о временах намаза — отправляется всегда, без привязки к сезону
+        if (type === 'prayer_times') {
+          const claim = await users.updateOne(
+            { userId: user.userId, [reminderField]: { $ne: todayStr } },
+            { $set: { [reminderField]: todayStr } }
+          );
+          if (claim.modifiedCount === 0) continue;
+          claimedToday = true;
 
-          // Не сезон или Шаввал уже выполнен — пропускаем этого пользователя
-          if (!isRamadan && !isShawwal) continue;
-          if (isShawwal && shawwalDone) continue;
-
-          // Формируем сообщение
-          let message;
-          if (isShawwal) {
-            if (type === 'suhur') {
-              message = SHAWWAL_MESSAGES.suhur[lang](prayerTime, iftarTime);
-            } else {
-              message = SHAWWAL_MESSAGES.iftar[lang](prayerTime, suhurTime);
-            }
-          } else {
-            message = RAMADAN_MESSAGES[type][lang].replace('{PRAYER_TIME}', prayerTime);
-          }
-
-          // Кнопка
-          const inlineKeyboard = (isShawwal && type === 'iftar')
-            ? { inline_keyboard: [[{ text: lang === 'kk' ? '✅ Ораза ұстадым' : '✅ Я держал пост', callback_data: 'shawwal_fast_done' }]] }
-            : { inline_keyboard: [[{ text: lang === 'kk' ? '✅ Жасалды' : '✅ Готово', callback_data: `ramadan_${type}_done` }]] };
-
+          const city = user.location?.city || (lang === 'kk' ? 'Белгісіз қала' : 'Город не указан');
+          const pt = user.prayerTimes;
+          const message = PRAYER_TIMES_MESSAGE[lang](
+            city,
+            pt.fajr    || '—',
+            pt.sunrise || '—',
+            pt.dhuhr   || '—',
+            pt.asr     || '—',
+            pt.maghrib || '—',
+            pt.isha    || '—'
+          );
           try {
-            await bot.sendMessage(user.userId, message, {
-              parse_mode: 'Markdown',
-              reply_markup: inlineKeyboard
-            });
-
-            console.log(`📨 ${isShawwal ? '🌙Shawwal' : '🕌Ramadan'} ${type} → User ${user.userId} (${userTimezone}, ${currentHour}:${currentMinute.toString().padStart(2, '0')})`);
+            await bot.sendMessage(user.userId, message, { parse_mode: 'Markdown' });
+            console.log(`📨 🕌 PrayerTimes → User ${user.userId} (${userTimezone})`);
             sentCount++;
             await new Promise(resolve => setTimeout(resolve, 100));
-
           } catch (sendError) {
-            if (sendError?.response?.body?.error_code === 403) {
+            if (isTelegramBlockedError(sendError)) {
               await users.updateOne(
                 { userId: user.userId },
                 { $set: { 'notificationSettings.ramadanReminders': false } }
               );
               console.log(`🚫 User ${user.userId} заблокировал бота — уведомления отключены`);
             } else {
+              if (claimedToday) {
+                await users.updateOne(
+                  { userId: user.userId },
+                  { $unset: { [reminderField]: '' } }
+                ).catch(() => {});
+              }
               console.error(`❌ Ошибка отправки ${user.userId}:`, sendError.message);
             }
+          }
+          continue;
+        }
+
+        // Определяем период
+        const isRamadan = todayStr >= RAMADAN_START_DATE && todayStr < EID_AL_FITR_DATE;
+        const isShawwal = todayStr >= SHAWWAL_START_DATE && todayStr <= SHAWWAL_END_DATE;
+        const shawwalDone = (user.shawwalFasts || 0) >= 6;
+
+        // Не сезон или Шаввал уже выполнен — пропускаем этого пользователя
+        if (!isRamadan && !isShawwal) continue;
+        if (isShawwal && shawwalDone) continue;
+
+        const claim = await users.updateOne(
+          { userId: user.userId, [reminderField]: { $ne: todayStr } },
+          { $set: { [reminderField]: todayStr } }
+        );
+        if (claim.modifiedCount === 0) continue;
+        claimedToday = true;
+
+        // Формируем сообщение
+        let message;
+        if (isShawwal) {
+          if (type === 'suhur') {
+            message = SHAWWAL_MESSAGES.suhur[lang](prayerTime, iftarTime);
+          } else {
+            message = SHAWWAL_MESSAGES.iftar[lang](prayerTime, suhurTime);
+          }
+        } else {
+          message = RAMADAN_MESSAGES[type][lang].replace('{PRAYER_TIME}', prayerTime);
+        }
+
+        // Кнопка
+        const inlineKeyboard = (isShawwal && type === 'iftar')
+          ? { inline_keyboard: [[{ text: lang === 'kk' ? '✅ Ораза ұстадым' : '✅ Я держал пост', callback_data: 'shawwal_fast_done' }]] }
+          : { inline_keyboard: [[{ text: lang === 'kk' ? '✅ Жасалды' : '✅ Готово', callback_data: `ramadan_${type}_done` }]] };
+
+        try {
+          await bot.sendMessage(user.userId, message, {
+            parse_mode: 'Markdown',
+            reply_markup: inlineKeyboard
+          });
+
+          console.log(`📨 ${isShawwal ? '🌙Shawwal' : '🕌Ramadan'} ${type} → User ${user.userId} (${userTimezone}, ${currentHour}:${currentMinute.toString().padStart(2, '0')})`);
+          sentCount++;
+          await new Promise(resolve => setTimeout(resolve, 100));
+
+        } catch (sendError) {
+          if (isTelegramBlockedError(sendError)) {
+            await users.updateOne(
+              { userId: user.userId },
+              { $set: { 'notificationSettings.ramadanReminders': false } }
+            );
+            console.log(`🚫 User ${user.userId} заблокировал бота — уведомления отключены`);
+          } else {
+            if (claimedToday) {
+              await users.updateOne(
+                { userId: user.userId },
+                { $unset: { [reminderField]: '' } }
+              ).catch(() => {});
+            }
+            console.error(`❌ Ошибка отправки ${user.userId}:`, sendError.message);
           }
         }
       } catch (error) {
@@ -493,7 +523,8 @@ async function sendPersonalizedRamadanReminder(type) {
     }
     
     if (sentCount > 0) {
-      console.log(`✅ ${type === 'suhur' ? '🌙 Сухур' : '🌆 Ифтар'} уведомления: ${sentCount}/${checkedCount} пользователей`);
+      const label = type === 'prayer_times' ? '🕌 Намаз' : (type === 'suhur' ? '🌙 Сухур' : '🌆 Ифтар');
+      console.log(`✅ ${label} уведомления: ${sentCount}/${checkedCount} пользователей`);
     }
   } catch (error) {
     console.error('❌ Ошибка уведомлений:', error);
@@ -659,7 +690,7 @@ bot.on('callback_query', async (query) => {
 
       const sourceLabel = newSource === 'muftyat' ? '🕌 ҚМДБ (ресми)' : '🌍 Халықаралық (Aladhan)';
       await bot.answerCallbackQuery(query.id, {
-        text: `✅ Есептеу: ${sourceLabel}\n🌅 ${updatedUser.prayerTimes?.fajr}\n🌆 ${updatedUser.prayerTimes?.maghrib}`,
+        text: `✅ Есептеу: ${sourceLabel}\n🌅 ${updatedUser?.prayerTimes?.fajr || '—'}\n🌆 ${updatedUser?.prayerTimes?.maghrib || '—'}`,
         show_alert: true
       });
 
@@ -1353,8 +1384,13 @@ bot.on('location', async (msg) => {
     
     try {
       // ✅ 1. Сначала timezone (мгновенно, без API)
-      const tzResult = geoTz.find(latitude, longitude);
-      const timezone = tzResult.length > 0 ? tzResult[0] : 'Asia/Almaty';
+      let tzResult = [];
+      try {
+        tzResult = geoTz.find(latitude, longitude);
+      } catch (tzError) {
+        console.warn('⚠️ geo-tz fallback to Asia/Almaty:', tzError?.message || tzError);
+      }
+      const timezone = resolveSafeTimezone(Array.isArray(tzResult) && tzResult.length > 0 ? tzResult[0] : 'Asia/Almaty');
 
       // ✅ 2. Страна по timezone
       const country = 
@@ -1406,8 +1442,8 @@ bot.on('location', async (msg) => {
         await bot.sendMessage(chatId,
           `✅ Орныңыз сақталды: *${city}*\n\n` +
           `⏰ Намаз уақыттары:\n` +
-          `🌅 Таң намазы: ${user.prayerTimes?.fajr || 'анықталмады'}\n` +
-          `🌆 Ақшам намазы: ${user.prayerTimes?.maghrib || 'анықталмады'}`,
+          `🌅 Таң намазы: ${user?.prayerTimes?.fajr || 'анықталмады'}\n` +
+          `🌆 Ақшам намазы: ${user?.prayerTimes?.maghrib || 'анықталмады'}`,
           {
             parse_mode: 'Markdown',
             reply_markup: {
@@ -2926,25 +2962,30 @@ bot.onText(/\/settings/, async (msg) => {
 📅 Жаңартылды: ${new Date(user.prayerTimes.lastUpdated).toLocaleDateString('kk-KZ')}`
       : '⚠️ Намаз уақыттары белгіленбеген';
     
+    const sourceLabel = user.prayerTimeSource === 'aladhan'
+      ? '\n🌍 *Намаз есебі:* Халықаралық'
+      : '\n🕌 *Намаз есебі:* ҚМДБ (ресми)';
+
     const message = `⚙️ *Сіздің баптауларыңыз:*
 
 📍 *Қала:* ${user.location?.city || 'Белгісіз'}
 🌍 *Ел:* ${user.location?.country || 'Белгісіз'}
 
-${prayerTimesInfo}
+${prayerTimesInfo}${sourceLabel}
 
 🔔 *Хабарландырулар:*
 ${user.notificationSettings?.ramadanReminders !== false ? '✅ Қосулы' : '❌ Өшірулі'}
 
 Өзгерту үшін төмендегі батырмаларды басыңыз:`;
     
-    bot.sendMessage(chatId, message, {
+    await bot.sendMessage(chatId, message, {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
           [{ text: '📍 Қаланы өзгерту', callback_data: 'change_city' }],
           [{ text: user.notificationSettings?.ramadanReminders !== false ? '🔕 Хабарландыруды өшіру' : '🔔 Хабарландыруды қосу', callback_data: 'toggle_notifications' }],
-          [{ text: '🔄 Уақытты жаңарту', callback_data: 'update_prayer_times' }]
+          [{ text: '🔄 Уақытты жаңарту', callback_data: 'update_prayer_times' }],
+          [{ text: user.prayerTimeSource === 'aladhan' ? '🕌 ҚМДБ есепке ауысу' : '🌍 Халықаралық есепке ауысу', callback_data: 'toggle_prayer_source' }]
         ]
       }
     });
