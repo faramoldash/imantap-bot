@@ -28,6 +28,7 @@ import {
   updatePaymentStatus,
   approvePayment,
   rejectPayment,
+  activateManualDemo,
   getUserAccess,
   getPendingPayments,
   addUserXP,
@@ -36,6 +37,7 @@ import {
   claimPaymentBonus
 } from './userService.js';
 import {
+  isMainAdmin,
   isAdmin,
   addManager,
   removeManager,
@@ -915,62 +917,94 @@ bot.on('callback_query', async (query) => {
   // Подтверждение оплаты
   // ==========================================
   if (data.startsWith('approve_')) {
-    const targetUserId = parseInt(data.replace('approve_', ''));
+    const targetUserId = parseInt(data.replace('approve_', ''), 10);
+    if (!Number.isInteger(targetUserId)) {
+      await bot.answerCallbackQuery(query.id, { text: '❌ Некорректный ID пользователя', show_alert: true });
+      return;
+    }
 
     try {
-      await approvePayment(targetUserId);
+      const approval = await approvePayment(targetUserId);
 
-      // Обновляем сообщение админа
+      if (!approval.approved) {
+        await bot.answerCallbackQuery(query.id, {
+          text: '⚠️ Этот платёж уже был обработан',
+          show_alert: true
+        });
+        await bot.editMessageReplyMarkup(
+          { inline_keyboard: [] },
+          { chat_id: chatId, message_id: messageId }
+        ).catch(() => {});
+        return;
+      }
+
+      // Обновляем сообщение админа (ошибки Telegram UI не должны ломать подтверждение)
       const originalCaption = query.message.caption || '';
-      const baseInfo = originalCaption.split('📅')[0]; // Берём всё до даты
-      
+      const baseInfo = escapeHtml(originalCaption.split('📅')[0]);
+      const adminLabel = escapeHtml(query.from.username ? '@' + query.from.username : 'ID: ' + userId);
+
       await bot.editMessageCaption(
         baseInfo +
-        `\n✅ <b>ПОДТВЕРЖДЕНО</b> ${query.from.username ? '@' + query.from.username : 'ID: ' + userId}\n` +
+        `\n✅ <b>ПОДТВЕРЖДЕНО</b> ${adminLabel}\n` +
         `⏰ ${new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' })}`,
         {
           chat_id: chatId,
           message_id: messageId,
-          parse_mode: 'HTML' // ✅ Добавлен parse_mode
+          parse_mode: 'HTML'
         }
-      );
+      ).catch((e) => console.warn('⚠️ Не удалось обновить подпись чека при approve:', e.message));
 
       await bot.answerCallbackQuery(query.id, { text: '✅ Оплата подтверждена!' });
 
-      // Уведомляем пользователя
-      await bot.sendMessage(
-        targetUserId,
-        `🎉 Төлем расталды!\n\n` +
-        `ImanTap Premium-ға қош келдіңіз! 🌙\n\n` +
-        `📅 *Жазылым мерзімі: 90 күн*\n` +
-        `Аяқталу күні: ${new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toLocaleDateString('kk-KZ')}\n\n` +
-        `Трекерді ашу үшін төмендегі батырманы басыңыз:`,
-        {
-          reply_markup: {
-            keyboard: [
-              [{
-                text: '📱 ImanTap ашу',
-                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${targetUserId}` }
-              }],
-              ['⚙️ Баптаулар', '📊 XP'],
-              ['📈 Статистика', '🎁 Менің промокодым']
-            ],
-            resize_keyboard: true
+      const user = await getUserById(targetUserId);
+      const userTz = resolveSafeTimezone(user?.location?.timezone);
+      const isRu = user?.language === 'ru';
+      const expiresAt = approval.subscriptionExpiresAt
+        ? new Date(approval.subscriptionExpiresAt)
+        : new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+      const formattedExpiry = expiresAt.toLocaleDateString(isRu ? 'ru-RU' : 'kk-KZ', { timeZone: userTz });
+
+      // Уведомляем пользователя (ошибка доставки не должна прерывать начисление реферального бонуса)
+      try {
+        await bot.sendMessage(
+          targetUserId,
+          isRu
+            ? `🎉 *Оплата подтверждена!*\n\n` +
+              `Добро пожаловать в ImanTap Premium! 🌙\n\n` +
+              `📅 *Срок подписки: 90 дней*\n` +
+              `Действует до: ${formattedExpiry}\n\n` +
+              `Нажмите кнопку ниже, чтобы открыть трекер:`
+            : `🎉 *Төлем расталды!*\n\n` +
+              `ImanTap Premium-ға қош келдіңіз! 🌙\n\n` +
+              `📅 *Жазылым мерзімі: 90 күн*\n` +
+              `Аяқталу күні: ${formattedExpiry}\n\n` +
+              `Трекерді ашу үшін төмендегі батырманы басыңыз:`,
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              keyboard: [
+                [{
+                  text: '📱 ImanTap ашу',
+                  web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${targetUserId}` }
+                }],
+                ['⚙️ Баптаулар', '📊 XP'],
+                ['📈 Статистика', '🎁 Менің промокодым']
+              ],
+              resize_keyboard: true
+            }
           }
-        }
-      );
+        );
+      } catch (notifyErr) {
+        console.error(`❌ Не удалось уведомить пользователя ${targetUserId} о подтверждении оплаты:`, notifyErr.message);
+      }
 
       // ========================================
       // 💰 НАЧИСЛЕНИЕ XP ВЛАДЕЛЬЦУ ПРОМОКОДА
       // ========================================
-      const user = await getUserById(targetUserId);
-
-      // Определяем владельца промокода (реферала)
       let inviterPromoCode = null;
-
-      if (user.referredBy) {
+      if (user?.referredBy) {
         inviterPromoCode = user.referredBy;
-      } else if (user.usedPromoCode) {
+      } else if (user?.usedPromoCode) {
         inviterPromoCode = user.usedPromoCode;
       }
 
@@ -993,7 +1027,7 @@ bot.on('callback_query', async (query) => {
                 `🎉 *+${referralResult.xp} XP!*${bonusText}\n\n` +
                 `${user.name || user.username || `Қолданушы ${targetUserId}`} сіздің промокодыңыз бойынша төлем жасады!\n\n` +
                 `💰 Сіз барлығы алдыңыз: *${totalXP} XP* (100 тіркелгені үшін + ${referralResult.xp} төлемі үшін)\n\n` +
-                `💡 20 наурызға дейін рефералдардан XP бонустары жинай беріңіз!`,
+                `💡 Рефералдардан XP бонустары жинай беріңіз!`,
                 { parse_mode: 'Markdown' }
               );
             } catch (e) {
@@ -1018,7 +1052,7 @@ bot.on('callback_query', async (query) => {
       await bot.answerCallbackQuery(query.id, { 
         text: '❌ Ошибка при подтверждении', 
         show_alert: true 
-      });
+      }).catch(() => {});
     }
     return;
   }
@@ -1027,31 +1061,49 @@ bot.on('callback_query', async (query) => {
   // Отклонение оплаты
   // ==========================================
   if (data.startsWith('reject_')) {
-    const targetUserId = parseInt(data.replace('reject_', ''));
+    const targetUserId = parseInt(data.replace('reject_', ''), 10);
+    if (!Number.isInteger(targetUserId)) {
+      await bot.answerCallbackQuery(query.id, { text: '❌ Некорректный ID пользователя', show_alert: true });
+      return;
+    }
 
     try {
-      const result = await rejectPayment(targetUserId); // ✅ Получаем результат
+      const result = await rejectPayment(targetUserId);
+
+      if (!result.rejected) {
+        await bot.answerCallbackQuery(query.id, {
+          text: '⚠️ Этот платёж уже был обработан',
+          show_alert: true
+        });
+        await bot.editMessageReplyMarkup(
+          { inline_keyboard: [] },
+          { chat_id: chatId, message_id: messageId }
+        ).catch(() => {});
+        return;
+      }
 
       // Обновляем сообщение админа
       const originalCaption = query.message.caption || '';
-      const baseInfo = originalCaption.split('📅')[0];
-      
+      const baseInfo = escapeHtml(originalCaption.split('📅')[0]);
+      const adminLabel = escapeHtml(query.from.username ? '@' + query.from.username : 'ID: ' + userId);
+
       await bot.editMessageCaption(
         baseInfo +
-        `\n❌ <b>ОТКЛОНЕНО</b> ${query.from.username ? '@' + query.from.username : 'ID: ' + userId}\n` +
+        `\n❌ <b>ОТКЛОНЕНО</b> ${adminLabel}\n` +
         `⏰ ${new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' })}`,
         {
           chat_id: chatId,
           message_id: messageId,
           parse_mode: 'HTML'
         }
-      );
+      ).catch((e) => console.warn('⚠️ Не удалось обновить подпись чека при reject:', e.message));
 
       await bot.answerCallbackQuery(query.id, { text: '❌ Оплата отклонена' });
 
       // Получаем данные пользователя
       const user = await getUserById(targetUserId);
-      const hasPromo = !!(user.usedPromoCode || user.referredBy);
+      const hasPromo = !!(user?.usedPromoCode || user?.referredBy);
+      const isRu = user?.language === 'ru';
 
       // ✅ РАЗНЫЕ СООБЩЕНИЯ в зависимости от статуса демо
       let messageText;
@@ -1059,17 +1111,26 @@ bot.on('callback_query', async (query) => {
 
       if (result.demoStatus === 'given_new') {
         // ✅ Первое отклонение - дали новый демо
-        messageText = 
-          `❌ *Төлем расталмады*\n\n` +
-          `Өкінішке орай, төлеміңізді растай алмадық.\n\n` +
-          `Мүмкін себептері:\n` +
-          `• Сома дұрыс емес\n` +
-          `• Чек анық емес\n` +
-          `• Төлем табылмады\n\n` +
-          `🎁 *Сізге 24 сағатқа демо-қолжетімділік берілді.*\n\n` +
-          `${hasPromo ? `💰 Промокод сақталды: *-500₸ жеңілдік*\n\n` : ''}` +
-          `Дұрыс чекті жіберу үшін төмендегі батырманы басыңыз:`;
-        
+        messageText = isRu
+          ? `❌ *Оплата не подтверждена*\n\n` +
+            `К сожалению, мы не смогли подтвердить ваш платёж.\n\n` +
+            `Возможные причины:\n` +
+            `• Неверная сумма\n` +
+            `• Нечёткий чек\n` +
+            `• Платёж не найден\n\n` +
+            `🎁 *Вам предоставлен демо-доступ на 24 часа.*\n\n` +
+            `${hasPromo ? `💰 Промокод сохранён: *-500₸ скидка*\n\n` : ''}` +
+            `Чтобы отправить корректный чек, нажмите кнопку ниже:`
+          : `❌ *Төлем расталмады*\n\n` +
+            `Өкінішке орай, төлеміңізді растай алмадық.\n\n` +
+            `Мүмкін себептері:\n` +
+            `• Сома дұрыс емес\n` +
+            `• Чек анық емес\n` +
+            `• Төлем табылмады\n\n` +
+            `🎁 *Сізге 24 сағатқа демо-қолжетімділік берілді.*\n\n` +
+            `${hasPromo ? `💰 Промокод сақталды: *-500₸ жеңілдік*\n\n` : ''}` +
+            `Дұрыс чекті жіберу үшін төмендегі батырманы басыңыз:`;
+
         keyboard = [
           [{
             text: '📱 ImanTap ашу',
@@ -1077,18 +1138,23 @@ bot.on('callback_query', async (query) => {
           }],
           [{ text: '💳 Қайта төлем жасау' }]
         ];
-        
+
       } else if (result.demoStatus === 'active') {
         // ✅ Демо ещё активен - показываем сколько осталось
-        const hoursLeft = Math.floor((new Date(result.demoExpiresAt) - new Date()) / (1000 * 60 * 60));
-        
-        messageText = 
-          `❌ *Төлем қайтадан расталмады*\n\n` +
-          `Чек дұрыс емес немесе төлем табылмады.\n\n` +
-          `⏳ *Demo-режимде ${hoursLeft} сағат қалды*\n\n` +
-          `${hasPromo ? `💰 Промокод сақталды: *-500₸ жеңілдік*\n\n` : ''}` +
-          `Дұрыс чекпен қайталап жіберіңіз:`;
-        
+        const hoursLeft = Math.max(1, Math.ceil((new Date(result.demoExpiresAt) - new Date()) / (1000 * 60 * 60)));
+
+        messageText = isRu
+          ? `❌ *Оплата снова не подтверждена*\n\n` +
+            `Чек неверный или платёж не найден.\n\n` +
+            `⏳ *В демо-режиме осталось ${hoursLeft} ч.*\n\n` +
+            `${hasPromo ? `💰 Промокод сохранён: *-500₸ скидка*\n\n` : ''}` +
+            `Отправьте корректный чек повторно:`
+          : `❌ *Төлем қайтадан расталмады*\n\n` +
+            `Чек дұрыс емес немесе төлем табылмады.\n\n` +
+            `⏳ *Demo-режимде ${hoursLeft} сағат қалды*\n\n` +
+            `${hasPromo ? `💰 Промокод сақталды: *-500₸ жеңілдік*\n\n` : ''}` +
+            `Дұрыс чекпен қайталап жіберіңіз:`;
+
         keyboard = [
           [{
             text: '📱 ImanTap ашу',
@@ -1096,33 +1162,43 @@ bot.on('callback_query', async (query) => {
           }],
           [{ text: '💳 Қайта төлем жасау' }]
         ];
-        
+
       } else {
         // ✅ Демо уже давали раньше и истёк - не даём повторно
-        messageText = 
-          `❌ *Төлем қайтадан расталмады*\n\n` +
-          `Чек дұрыс емес немесе төлем табылмады.\n\n` +
-          `⚠️ *Демо-қолжетімділік біржола берілген.*\n\n` +
-          `${hasPromo ? `💰 Промокод сақталды: *-500₸ жеңілдік*\n\n` : ''}` +
-          `Дұрыс чекпен қайталап жіберіңіз немесе қолдау қызметіне жазыңыз:\n` +
-          `👉 @ImanTapSupport`;
-        
+        messageText = isRu
+          ? `❌ *Оплата не подтверждена*\n\n` +
+            `Чек неверный или платёж не найден.\n\n` +
+            `⚠️ *Демо-доступ предоставляется только один раз.*\n\n` +
+            `${hasPromo ? `💰 Промокод сохранён: *-500₸ скидка*\n\n` : ''}` +
+            `Отправьте корректный чек повторно или напишите в поддержку:\n` +
+            `👉 @ImanTapSupport`
+          : `❌ *Төлем қайтадан расталмады*\n\n` +
+            `Чек дұрыс емес немесе төлем табылмады.\n\n` +
+            `⚠️ *Демо-қолжетімділік біржола берілген.*\n\n` +
+            `${hasPromo ? `💰 Промокод сақталды: *-500₸ жеңілдік*\n\n` : ''}` +
+            `Дұрыс чекпен қайталап жіберіңіз немесе қолдау қызметіне жазыңыз:\n` +
+            `👉 @ImanTapSupport`;
+
         keyboard = [
           [{ text: '💳 Қайта төлем жасау' }]
         ];
       }
 
-      await bot.sendMessage(
-        targetUserId,
-        messageText,
-        {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            keyboard: keyboard,
-            resize_keyboard: true
+      try {
+        await bot.sendMessage(
+          targetUserId,
+          messageText,
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              keyboard: keyboard,
+              resize_keyboard: true
+            }
           }
-        }
-      );
+        );
+      } catch (notifyErr) {
+        console.error(`❌ Не удалось уведомить пользователя ${targetUserId} об отклонении оплаты:`, notifyErr.message);
+      }
 
       console.log(`❌ Оплата отклонена для пользователя ${targetUserId}, demoStatus: ${result.demoStatus}`);
 
@@ -1131,7 +1207,7 @@ bot.on('callback_query', async (query) => {
       await bot.answerCallbackQuery(query.id, { 
         text: '❌ Ошибка при отклонении', 
         show_alert: true 
-      });
+      }).catch(() => {});
     }
     return;
   }
@@ -1366,10 +1442,15 @@ async function showPayment(chatId, userId, price, hasDiscount) {
       remove_keyboard: true
     });
 
+    // Не сбрасываем статус активной подписки при раннем продлении (за 3/1 день до истечения)
+    const hasActivePaidSub = user?.paymentStatus === 'paid'
+      && user?.subscriptionExpiresAt
+      && new Date(user.subscriptionExpiresAt) > new Date();
+
     await updateUserOnboarding(userId, {
       paidAmount: price,
       hasDiscount: hasDiscount,
-      paymentStatus: 'unpaid'
+      ...(hasActivePaidSub ? {} : { paymentStatus: 'unpaid' }),
     });
 
     setState(userId, 'WAITING_RECEIPT');
@@ -1780,38 +1861,58 @@ bot.on('message', async (msg) => {
     // ==========================================
     if (text === '🎁 24 сағат тегін') {
       try {
-        const user = await getUserById(userId);
-        
-        // ✅ ПРОВЕРКА: Если демо УЖЕ активен - не даём повторно
-        if (user.accessType === 'demo' && user.demoExpiresAt && new Date() < new Date(user.demoExpiresAt)) {
-          const hoursLeft = Math.floor((new Date(user.demoExpiresAt) - new Date()) / (1000 * 60 * 60));
-          await bot.sendMessage(
-            chatId,
-            `⚠️ Демо-режим қазірдің өзінде қосулы!\n\n` +
-            `⏳ Қалған уақыт: ${hoursLeft} сағат\n\n` +
-            `Трекерді пайдаланыңыз:`,
-            {
-              parse_mode: 'Markdown',
-              reply_markup: {
-                keyboard: [
-                  [{
-                    text: '📱 ImanTap ашу',
-                    web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
-                  }],
-                  [{ text: '💳 Толық нұсқаны сатып алу' }]
-                ],
-                resize_keyboard: true
+        // Атомарная активация разового демо (защита от повторной активации после истечения)
+        const demoResult = await activateManualDemo(userId);
+
+        if (!demoResult.activated) {
+          if (demoResult.reason === 'already_active' && demoResult.demoExpiresAt) {
+            const hoursLeft = Math.max(1, Math.ceil((demoResult.demoExpiresAt - new Date()) / (1000 * 60 * 60)));
+            await bot.sendMessage(
+              chatId,
+              `⚠️ Демо-режим қазірдің өзінде қосулы!\n\n` +
+              `⏳ Қалған уақыт: ${hoursLeft} сағат\n\n` +
+              `Трекерді пайдаланыңыз:`,
+              {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                  keyboard: [
+                    [{
+                      text: '📱 ImanTap ашу',
+                      web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
+                    }],
+                    [{ text: '💳 Толық нұсқаны сатып алу' }]
+                  ],
+                  resize_keyboard: true
+                }
               }
-            }
-          );
-          return;
-        }
-        
-        // ✅ ПРОВЕРКА: Если демо уже давали при отклонении - не даём
-        if (user.demoGivenOnRejection) {
+            );
+            return;
+          }
+
+          if (demoResult.reason === 'already_paid') {
+            await bot.sendMessage(
+              chatId,
+              `✅ Сізде қазірдің өзінде Premium бар!\n\nMini App-ты ашыңыз:`,
+              {
+                reply_markup: {
+                  keyboard: [
+                    [{
+                      text: '📱 ImanTap ашу',
+                      web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
+                    }],
+                    ['⚙️ Баптаулар', '📊 XP'],
+                    ['📈 Статистика', '🎁 Менің промокодым']
+                  ],
+                  resize_keyboard: true
+                }
+              }
+            );
+            return;
+          }
+
           await bot.sendMessage(
             chatId,
-            `⚠️ Сіз демо-қолжетімділікті алдын ала алдыңыз.\n\n` +
+            `⚠️ Сіз демо-қолжетімділікті алдын ала пайдаландыңыз.\n\n` +
             `Толық нұсқаға өту үшін төлем жасаңыз:`,
             {
               parse_mode: 'Markdown',
@@ -1825,17 +1926,7 @@ bot.on('message', async (msg) => {
           );
           return;
         }
-        
-        // ✅ Активируем демо только 1 раз
-        const demoExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-        await updateUserOnboarding(userId, {
-          accessType: 'demo',
-          demoExpiresAt: demoExpiresAt,
-          onboardingCompleted: true,
-          paymentStatus: 'unpaid',
-          demoActivatedManually: true // ✅ Помечаем что активировал вручную
-        });
-        
+
         await bot.sendMessage(
           chatId,
           `✅ *Demo-режим қосылды!* 🎉\n\n` +
@@ -1855,8 +1946,8 @@ bot.on('message', async (msg) => {
             }
           }
         );
-        
-        console.log(`🎁 Демо-доступ активирован вручную для пользователя ${userId} до ${demoExpiresAt.toISOString()}`);
+
+        console.log(`🎁 Демо-доступ активирован вручную для пользователя ${userId} до ${demoResult.demoExpiresAt.toISOString()}`);
         clearSession(userId);
       } catch (error) {
         console.error('❌ Ошибка активации демо:', error);
@@ -2370,20 +2461,32 @@ async function handleReceipt(userId, chatId, fileId, fileType, fileName = null) 
 // 👨‍💼 УВЕДОМЛЕНИЕ ВСЕХ АДМИНОВ
 // =====================================================
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 async function notifyAdminsNewPayment(userId, fileId, fileType) {
   try {
     const user = await getUserById(userId);
     const adminIds = await getAdmins();
 
+    if (adminIds.length === 0) {
+      console.error(`❌ КРИТИЧНО: нет настроенных админов/менеджеров для проверки чека userId ${userId}`);
+      return 0;
+    }
+
     // Определяем реферала
     let referralInfo = '—';
-    if (user.referredBy) {
+    if (user?.referredBy) {
       referralInfo = `${user.referredBy}`;
-    } else if (user.usedPromoCode) {
+    } else if (user?.usedPromoCode) {
       // Если ввёл промокод вручную, находим владельца
       const promoOwner = await getUserByPromoCode(user.usedPromoCode);
       if (promoOwner) {
-        const ownerName = promoOwner.username 
+        const ownerName = promoOwner.username
           ? (promoOwner.username.startsWith('@') ? promoOwner.username : `@${promoOwner.username}`)
           : `ID: ${promoOwner.userId}`;
         referralInfo = `${user.usedPromoCode} (от ${ownerName})`;
@@ -2392,25 +2495,27 @@ async function notifyAdminsNewPayment(userId, fileId, fileType) {
       }
     }
 
-    const discountText = user.hasDiscount 
-      ? `<s>${formatPrice(2490)}</s> → <b>${formatPrice(user.paidAmount)}</b> ✅ Скидка!` 
-      : `<b>${formatPrice(user.paidAmount)}</b>`;
+    const hasDiscount = !!(user?.hasDiscount || user?.referredBy || user?.usedPromoCode);
+    const effectiveAmount = user?.paidAmount || (hasDiscount ? 1990 : 2490);
+    const discountText = hasDiscount
+      ? `<s>${formatPrice(2490)}</s> → <b>${formatPrice(effectiveAmount)}</b> ✅ Скидка!`
+      : `<b>${formatPrice(effectiveAmount)}</b>`;
 
-    // Форматируем username (проверяем есть ли уже @)
-    const usernameDisplay = user.username 
+    // Форматируем username (проверяем есть ли уже @) и экранируем HTML
+    const usernameDisplay = user?.username
       ? (user.username.startsWith('@') ? user.username : `@${user.username}`)
       : '—';
 
-    const caption = 
+    const caption =
       `🔔 <b>Новый платёж на проверке!</b>\n\n` +
       `👤 User ID: <code>${userId}</code>\n` +
-      `📱 Username: ${usernameDisplay}\n` +
-      `📞 Телефон: ${user.phoneNumber || '—'}\n` +
-      `📍 Город: ${user.location?.city || '—'}\n` +
+      `📱 Username: ${escapeHtml(usernameDisplay)}\n` +
+      `📞 Телефон: ${escapeHtml(user?.phoneNumber || '—')}\n` +
+      `📍 Город: ${escapeHtml(user?.location?.city || '—')}\n` +
       `💰 Сумма: ${discountText}\n` +
-      `🎟️ Промокод: ${user.usedPromoCode || '—'}\n` +
-      `👥 Реферал: ${referralInfo}\n` +
-      `📅 ${new Date().toLocaleString('ru-RU')}`;
+      `🎟️ Промокод: ${escapeHtml(user?.usedPromoCode || '—')}\n` +
+      `👥 Реферал: ${escapeHtml(referralInfo)}\n` +
+      `📅 ${new Date().toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' })}`;
 
     const keyboard = {
       inline_keyboard: [
@@ -2421,28 +2526,48 @@ async function notifyAdminsNewPayment(userId, fileId, fileType) {
       ]
     };
 
+    let deliveredCount = 0;
+
     for (const adminId of adminIds) {
       try {
         if (fileType === 'photo') {
-          await bot.sendPhoto(adminId, fileId, { 
-            caption, 
-            parse_mode: 'HTML', 
-            reply_markup: keyboard 
+          await bot.sendPhoto(adminId, fileId, {
+            caption,
+            parse_mode: 'HTML',
+            reply_markup: keyboard
           });
         } else {
-          await bot.sendDocument(adminId, fileId, { 
-            caption, 
-            parse_mode: 'HTML', 
-            reply_markup: keyboard 
+          await bot.sendDocument(adminId, fileId, {
+            caption,
+            parse_mode: 'HTML',
+            reply_markup: keyboard
           });
         }
+        deliveredCount++;
         console.log(`✅ Уведомление отправлено админу ${adminId}`);
       } catch (error) {
-        console.error(`❌ Не удалось отправить админу ${adminId}:`, error.message);
+        console.error(`❌ Не удалось отправить чек админу ${adminId}:`, error.message);
+        // Fallback: пробуем доставить хотя бы текстовое уведомление с кнопками
+        try {
+          await bot.sendMessage(
+            adminId,
+            `${caption}\n\n⚠️ <i>Не удалось прикрепить файл чека (${escapeHtml(error.message)})</i>`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
+          );
+          deliveredCount++;
+        } catch (fallbackErr) {
+          console.error(`❌ Fallback уведомление админу ${adminId} также не доставлено:`, fallbackErr.message);
+        }
       }
     }
+
+    if (deliveredCount === 0) {
+      console.error(`❌ КРИТИЧНО: ни один админ не получил чек от userId ${userId}! Проверьте /pending.`);
+    }
+    return deliveredCount;
   } catch (error) {
     console.error('❌ Ошибка в notifyAdminsNewPayment:', error);
+    return 0;
   }
 }
 
@@ -3091,14 +3216,13 @@ bot.onText(/\/xp/, async (msg) => {
 bot.onText(/\/addmanager(?:\s+(\d+))?/, async (msg, match) => {
   const adminId = msg.from.id;
   const chatId = msg.chat.id;
-  const MAIN_ADMIN = parseInt(process.env.MAIN_ADMIN_ID);
 
-  if (adminId !== MAIN_ADMIN) {
+  if (!isMainAdmin(adminId)) {
     bot.sendMessage(chatId, '❌ Только главный админ может добавлять менеджеров');
     return;
   }
 
-  const managerId = match && match[1] ? parseInt(match[1]) : null;
+  const managerId = match && match[1] ? parseInt(match[1], 10) : null;
 
   if (!managerId) {
     bot.sendMessage(
@@ -3116,32 +3240,33 @@ bot.onText(/\/addmanager(?:\s+(\d+))?/, async (msg, match) => {
 
   try {
     const result = await addManager(managerId, adminId);
-    
+
     if (result.success) {
-      bot.sendMessage(
-        chatId,
-        `✅ *Менеджер добавлен!*\n\n` +
-        `ID: \`${managerId}\`\n\n` +
-        `Теперь он будет получать уведомления о новых платежах.`,
-        { parse_mode: 'Markdown' }
-      );
-      
+      let dmWarning = '';
       // Уведомляем нового менеджера
       try {
         await bot.sendMessage(
           managerId,
-          `🎉 *Вы добавлены как менеджер Imantap!*\n\n` +
+          `🎉 *Вы добавлены как менеджер ImanTap!*\n\n` +
           `Теперь вы можете:\n` +
           `✅ Подтверждать оплаты\n` +
           `❌ Отклонять платежи\n` +
-          `📋 Просматривать статистику\n\n` +
+          `📋 Просматривать ожидающие чеки\n\n` +
           `Команды:\n` +
           `/pending - список ожидающих`,
           { parse_mode: 'Markdown' }
         );
       } catch (e) {
-        // Менеджер ещё не запустил бота
+        dmWarning = '\n\n⚠️ Не удалось отправить приветствие менеджеру — попросите его сначала нажать /start в боте, иначе чеки не будут приходить.';
       }
+
+      bot.sendMessage(
+        chatId,
+        `✅ *Менеджер добавлен!*\n\n` +
+        `ID: \`${managerId}\`\n\n` +
+        `Теперь он будет получать уведомления о новых платежах.${dmWarning}`,
+        { parse_mode: 'Markdown' }
+      );
     } else {
       bot.sendMessage(chatId, `❌ ${result.message}`);
     }
@@ -3155,14 +3280,13 @@ bot.onText(/\/addmanager(?:\s+(\d+))?/, async (msg, match) => {
 bot.onText(/\/removemanager(?:\s+(\d+))?/, async (msg, match) => {
   const adminId = msg.from.id;
   const chatId = msg.chat.id;
-  const MAIN_ADMIN = parseInt(process.env.MAIN_ADMIN_ID);
 
-  if (adminId !== MAIN_ADMIN) {
+  if (!isMainAdmin(adminId)) {
     bot.sendMessage(chatId, '❌ Только главный админ может удалять менеджеров');
     return;
   }
 
-  const managerId = match && match[1] ? parseInt(match[1]) : null;
+  const managerId = match && match[1] ? parseInt(match[1], 10) : null;
 
   if (!managerId) {
     bot.sendMessage(
@@ -3174,11 +3298,11 @@ bot.onText(/\/removemanager(?:\s+(\d+))?/, async (msg, match) => {
   }
 
   try {
-    const result = await removeManager(managerId);
-    
+    const result = await removeManager(managerId, adminId);
+
     if (result.success) {
       bot.sendMessage(chatId, `✅ Менеджер удалён: \`${managerId}\``, { parse_mode: 'Markdown' });
-      
+
       // Уведомляем удалённого менеджера
       try {
         await bot.sendMessage(
@@ -3201,27 +3325,26 @@ bot.onText(/\/removemanager(?:\s+(\d+))?/, async (msg, match) => {
 bot.onText(/\/managers/, async (msg) => {
   const adminId = msg.from.id;
   const chatId = msg.chat.id;
-  const MAIN_ADMIN = parseInt(process.env.MAIN_ADMIN_ID);
 
-  if (adminId !== MAIN_ADMIN) {
+  if (!isMainAdmin(adminId)) {
     bot.sendMessage(chatId, '❌ Доступ запрещён');
     return;
   }
 
   try {
     const managers = await listManagers();
-    
+
     if (managers.length === 0) {
       bot.sendMessage(chatId, '📋 Менеджеры не добавлены');
       return;
     }
 
     let message = `👥 *Список менеджеров: ${managers.length}*\n\n`;
-    
+
     managers.forEach((m, index) => {
       message += `${index + 1}. ID: \`${m.telegramId}\`\n`;
       if (m.username) message += `   @${m.username}\n`;
-      message += `   Добавлен: ${new Date(m.addedAt).toLocaleDateString('ru-RU')}\n\n`;
+      message += `   Добавлен: ${m.addedAt ? new Date(m.addedAt).toLocaleDateString('ru-RU') : 'н/д'}\n\n`;
     });
 
     bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
@@ -3251,14 +3374,23 @@ bot.onText(/\/pending/, async (msg) => {
     }
 
     let message = `📋 *Ожидают проверки: ${pending.length}*\n\n`;
+    const maxItems = 30;
 
-    pending.forEach((user, index) => {
-      message += 
+    pending.slice(0, maxItems).forEach((user, index) => {
+      const amountText = user.paidAmount ? `${user.paidAmount}₸` : 'н/д';
+      const submittedText = user.receiptSubmittedAt
+        ? new Date(user.receiptSubmittedAt).toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' })
+        : 'н/д';
+      message +=
         `${index + 1}. User \`${user.userId}\`\n` +
-        `   💰 ${user.paidAmount}₸\n` +
+        `   💰 ${amountText}\n` +
         `   📍 ${user.location?.city || 'н/д'}\n` +
-        `   ⏰ ${new Date(user.receiptSubmittedAt).toLocaleString('ru-RU')}\n\n`;
+        `   ⏰ ${submittedText}\n\n`;
     });
+
+    if (pending.length > maxItems) {
+      message += `... и ещё ${pending.length - maxItems} платежей`;
+    }
 
     bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
 
@@ -3272,22 +3404,23 @@ bot.onText(/\/pending/, async (msg) => {
 bot.onText(/\/activatedemo(?:\s+(\d+))?/, async (msg, match) => {
   const adminId = msg.from.id;
   const chatId = msg.chat.id;
-  const MAIN_ADMIN = parseInt(process.env.MAIN_ADMIN_ID);
 
-  if (adminId !== MAIN_ADMIN) {
+  if (!isMainAdmin(adminId)) {
     return; // Только админ может использовать
   }
 
-  const targetUserId = match && match[1] ? parseInt(match[1]) : adminId;
+  const targetUserId = match && match[1] ? parseInt(match[1], 10) : adminId;
 
   try {
     const demoExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // +24 часа
-    
+
     await updateUserOnboarding(targetUserId, {
       accessType: 'demo',
       demoExpiresAt: demoExpiresAt,
       paymentStatus: 'unpaid', // Важно!
-      onboardingCompleted: true
+      onboardingCompleted: true,
+      demoActivatedManually: true,
+      demoExpiredNotified: false
     });
 
     bot.sendMessage(
@@ -3296,7 +3429,7 @@ bot.onText(/\/activatedemo(?:\s+(\d+))?/, async (msg, match) => {
       `Истекает: ${demoExpiresAt.toLocaleString('ru-RU', { timeZone: 'Asia/Almaty' })}\n\n` +
       `Откройте Mini App для проверки.`
     );
-    
+
     console.log(`🎁 Демо активировано админом для ${targetUserId}`);
   } catch (error) {
     console.error('❌ Ошибка активации демо:', error);
@@ -3334,12 +3467,7 @@ bot.onText(/\/checkdemo/, async (msg) => {
 // =====================================================
 // 🔐 АДМИН-КОМАНДЫ ДЛЯ АНАЛИТИКИ
 // =====================================================
-
-// Проверка: является ли пользователь главным админом
-function isMainAdmin(userId) {
-  const MAIN_ADMIN = parseInt(process.env.MAIN_ADMIN_ID);
-  return userId === MAIN_ADMIN;
-}
+// isMainAdmin импортируется из ./adminService.js
 
 // 📊 Общая статистика
 bot.onText(/\/admin_stats/, async (msg) => {
@@ -3364,7 +3492,7 @@ bot.onText(/\/admin_stats/, async (msg) => {
     // Основные метрики
     const totalUsers = await users.countDocuments({});
     const paidUsers = await users.countDocuments({ paymentStatus: 'paid' });
-    const demoUsers = await users.countDocuments({ accessType: 'demo' });
+    const demoUsers = await users.countDocuments({ accessType: 'demo', demoExpiresAt: { $gt: now } });
     const pendingPayments = await users.countDocuments({ paymentStatus: 'pending' });
 
     // Сегодня
@@ -3393,13 +3521,14 @@ bot.onText(/\/admin_stats/, async (msg) => {
     const xpAgg = await users.aggregate([{ $group: { _id: null, avg: { $avg: '$xp' } } }]).next();
     const avgXP = xpAgg?.avg || 0;
 
-    // Конверсия
-    const conversionRate = ((paidUsers / totalUsers) * 100).toFixed(1);
+    // Конверсия (защита от деления на 0)
+    const conversionRate = totalUsers > 0 ? ((paidUsers / totalUsers) * 100).toFixed(1) : '0.0';
+    const activeRate = totalUsers > 0 ? ((activeUsers / totalUsers) * 100).toFixed(1) : '0.0';
 
     const message = `📊 *ImanTap Статистика*\n\n` +
       `👥 *Всего пользователей:* ${totalUsers}\n` +
       `✅ *Оплативших:* ${paidUsers} (${conversionRate}%)\n` +
-      `🎯 *Демо:* ${demoUsers}\n` +
+      `🎯 *Активное демо:* ${demoUsers}\n` +
       `⏳ *На проверке:* ${pendingPayments}\n` +
       `💰 *Общий доход:* ${totalRevenue.toLocaleString()}₸\n\n` +
       `📈 *Сегодня:*\n` +
@@ -3407,7 +3536,7 @@ bot.onText(/\/admin_stats/, async (msg) => {
       `• Оплат: ${paidToday}\n` +
       `• Доход: ${revenueToday.toLocaleString()}₸\n\n` +
       `🔥 *Активность:*\n` +
-      `• Активных за 24ч: ${activeUsers} (${((activeUsers/totalUsers)*100).toFixed(1)}%)\n` +
+      `• Активных за 24ч: ${activeUsers} (${activeRate}%)\n` +
       `• Средний XP: ${Math.round(avgXP).toLocaleString()}\n\n` +
       `🕐 Обновлено: ${almatyTime.toLocaleTimeString('ru-RU')}`;
 
@@ -3438,27 +3567,29 @@ bot.onText(/\/admin_conversion/, async (msg) => {
     const sentReceipt = await users.countDocuments({ paymentStatus: { $in: ['pending', 'paid'] } });
     const paid = await users.countDocuments({ paymentStatus: 'paid' });
 
+    const safePct = (num, den) => (den > 0 ? (num / den) * 100 : 0);
+
     const message = `🔄 *Воронка конверсии*\n\n` +
       `1️⃣ Зашли в бота: *${total}* (100%)\n` +
-      `     ↓ ${((withPhone/total)*100).toFixed(1)}%\n\n` +
-      `2️⃣ Указали телефон: *${withPhone}* (${((withPhone/total)*100).toFixed(1)}%)\n` +
-      `     ↓ ${((withLocation/withPhone)*100).toFixed(1)}%\n\n` +
-      `3️⃣ Указали геолокацию: *${withLocation}* (${((withLocation/total)*100).toFixed(1)}%)\n` +
-      `     ↓ ${((completedOnboarding/withLocation)*100).toFixed(1)}%\n\n` +
-      `4️⃣ Завершили онбординг: *${completedOnboarding}* (${((completedOnboarding/total)*100).toFixed(1)}%)\n` +
-      `     ↓ ${((sentReceipt/completedOnboarding)*100).toFixed(1)}%\n\n` +
-      `5️⃣ Отправили чек: *${sentReceipt}* (${((sentReceipt/total)*100).toFixed(1)}%)\n` +
-      `     ↓ ${sentReceipt > 0 ? ((paid/sentReceipt)*100).toFixed(1) : 0}%\n\n` +
-      `6️⃣ Оплатили: *${paid}* (${((paid/total)*100).toFixed(1)}%)\n\n` +
+      `     ↓ ${safePct(withPhone, total).toFixed(1)}%\n\n` +
+      `2️⃣ Указали телефон: *${withPhone}* (${safePct(withPhone, total).toFixed(1)}%)\n` +
+      `     ↓ ${safePct(withLocation, withPhone).toFixed(1)}%\n\n` +
+      `3️⃣ Указали геолокацию: *${withLocation}* (${safePct(withLocation, total).toFixed(1)}%)\n` +
+      `     ↓ ${safePct(completedOnboarding, withLocation).toFixed(1)}%\n\n` +
+      `4️⃣ Завершили онбординг: *${completedOnboarding}* (${safePct(completedOnboarding, total).toFixed(1)}%)\n` +
+      `     ↓ ${safePct(sentReceipt, completedOnboarding).toFixed(1)}%\n\n` +
+      `5️⃣ Отправили чек: *${sentReceipt}* (${safePct(sentReceipt, total).toFixed(1)}%)\n` +
+      `     ↓ ${safePct(paid, sentReceipt).toFixed(1)}%\n\n` +
+      `6️⃣ Оплатили: *${paid}* (${safePct(paid, total).toFixed(1)}%)\n\n` +
       `💡 *Главная проблема:* `;
 
     // Находим самое слабое место
     const drops = [
-      { step: 'Телефон', rate: (withPhone/total)*100 },
-      { step: 'Геолокация', rate: (withLocation/withPhone)*100 },
-      { step: 'Онбординг', rate: (completedOnboarding/withLocation)*100 },
-      { step: 'Чек', rate: (sentReceipt/completedOnboarding)*100 },
-      { step: 'Оплата', rate: sentReceipt > 0 ? (paid/sentReceipt)*100 : 0 }
+      { step: 'Телефон', rate: safePct(withPhone, total) },
+      { step: 'Геолокация', rate: safePct(withLocation, withPhone) },
+      { step: 'Онбординг', rate: safePct(completedOnboarding, withLocation) },
+      { step: 'Чек', rate: safePct(sentReceipt, completedOnboarding) },
+      { step: 'Оплата', rate: safePct(paid, sentReceipt) }
     ];
 
     const worstDrop = drops.sort((a, b) => a.rate - b.rate)[0];
@@ -3539,14 +3670,17 @@ bot.onText(/\/admin_finance/, async (msg) => {
     
     // Общий доход
     const totalRevenue = paidUsers.reduce((sum, u) => sum + (u.paidAmount || 0), 0);
-    
-    // Средний чек
-    const avgCheck = totalRevenue / paidUsers.length;
-    
+
+    // Средний чек (защита от деления на 0)
+    const paidCount = paidUsers.length;
+    const avgCheck = paidCount > 0 ? totalRevenue / paidCount : 0;
+
     // Со скидкой vs без
     const withDiscount = paidUsers.filter(u => u.hasDiscount).length;
-    const withoutDiscount = paidUsers.length - withDiscount;
-    
+    const withoutDiscount = paidCount - withDiscount;
+    const discountPct = paidCount > 0 ? ((withDiscount / paidCount) * 100).toFixed(1) : '0.0';
+    const noDiscountPct = paidCount > 0 ? ((withoutDiscount / paidCount) * 100).toFixed(1) : '0.0';
+
     const revenueWithDiscount = paidUsers
       .filter(u => u.hasDiscount)
       .reduce((sum, u) => sum + (u.paidAmount || 0), 0);
@@ -3566,16 +3700,16 @@ bot.onText(/\/admin_finance/, async (msg) => {
 
     const message = `💰 *Финансовая статистика*\n\n` +
       `💵 *Общий доход:* ${totalRevenue.toLocaleString()}₸\n` +
-      `📊 *Оплат всего:* ${paidUsers.length}\n` +
+      `📊 *Оплат всего:* ${paidCount}\n` +
       `💳 *Средний чек:* ${Math.round(avgCheck).toLocaleString()}₸\n\n` +
       `🎁 *Со скидкой:*\n` +
-      `   ${withDiscount} шт (${((withDiscount/paidUsers.length)*100).toFixed(1)}%) → ${revenueWithDiscount.toLocaleString()}₸\n\n` +
+      `   ${withDiscount} шт (${discountPct}%) → ${revenueWithDiscount.toLocaleString()}₸\n\n` +
       `💎 *Без скидки:*\n` +
-      `   ${withoutDiscount} шт (${((withoutDiscount/paidUsers.length)*100).toFixed(1)}%) → ${revenueWithoutDiscount.toLocaleString()}₸\n\n` +
+      `   ${withoutDiscount} шт (${noDiscountPct}%) → ${revenueWithoutDiscount.toLocaleString()}₸\n\n` +
       `📅 *За период:*\n` +
       `• 7 дней: ${revenueWeek.toLocaleString()}₸\n` +
       `• 30 дней (MRR): ${revenueMonth.toLocaleString()}₸\n\n` +
-      `📈 *Прогноз MRR:* ${(revenueMonth * (30/30)).toLocaleString()}₸/мес`;
+      `📈 *Прогноз MRR:* ${revenueMonth.toLocaleString()}₸/мес`;
 
     bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
   } catch (error) {
@@ -3659,8 +3793,9 @@ bot.onText(/\/admin_geo/, async (msg) => {
     const db = getDB();
     const users = db.collection('users');
 
-    // Топ стран
-    const [countryAgg, cityAgg] = await Promise.all([
+    // Топ стран и общее число пользователей для расчёта долей
+    const [totalUsers, countryAgg, cityAgg] = await Promise.all([
+      users.countDocuments({}),
       users.aggregate([
         { $match: { 'location.country': { $ne: null } } },
         { $group: { _id: { $ifNull: ['$location.country', 'Unknown'] }, count: { $sum: 1 } } },
@@ -3682,7 +3817,8 @@ bot.onText(/\/admin_geo/, async (msg) => {
     message += `🌎 *Топ-5 стран:*\n`;
     topCountries.forEach(([country, count], i) => {
       const emoji = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '  ';
-      message += `${emoji} ${country}: ${count} (${((count/allUsers.length)*100).toFixed(1)}%)\n`;
+      const pct = totalUsers > 0 ? ((count / totalUsers) * 100).toFixed(1) : '0.0';
+      message += `${emoji} ${country}: ${count} (${pct}%)\n`;
     });
 
     message += `\n🏙 *Топ-10 городов:*\n`;
@@ -3699,9 +3835,9 @@ bot.onText(/\/admin_geo/, async (msg) => {
 
 // ─── /create_contest ────────────────────────────────────────────────────────
 bot.onText(/\/create_contest/, async (msg) => {
-  const { id: chatId, id: userId } = msg.chat;
-  const MAIN_ADMIN = parseInt(process.env.MAIN_ADMIN_ID);
-  if (userId !== MAIN_ADMIN) return;
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  if (!isMainAdmin(userId)) return;
 
   setState(userId, 'CREATE_CONTEST_NAME');
   bot.sendMessage(chatId,

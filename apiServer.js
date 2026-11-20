@@ -115,6 +115,46 @@ export function applyCorsHeaders(req, res, allowedOrigins) {
   return { handled: false, allowed: false };
 }
 
+export const PROTECTED_SYNC_FIELDS = Object.freeze([
+  'paymentStatus',
+  'accessType',
+  'paidAmount',
+  'demoExpiresAt',
+  'subscriptionExpiresAt',
+  'subscriptionNotified3Days',
+  'subscriptionNotified1Day',
+  'hasDiscount',
+  'paymentDate',
+  'receiptFileId',
+  'receiptPhotoId',
+  'receiptFileType',
+  'receiptFileName',
+  'receiptSubmittedAt',
+  'demoGivenOnRejection',
+  'demoActivatedManually',
+  'demoExpiredNotified',
+  'paymentBonusGiven',
+  'referralBonusGiven',
+  'hasRedeemedReferral',
+  'referredBy',
+  'usedPromoCode',
+  'invitedCount',
+  'xp',
+  'role',
+  'isAdmin',
+]);
+
+export function sanitizeSyncPayload(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return {};
+  }
+  const clean = { ...payload };
+  for (const field of PROTECTED_SYNC_FIELDS) {
+    delete clean[field];
+  }
+  return clean;
+}
+
 export function createApiServer({
   bot,
   port = 8080,
@@ -125,6 +165,11 @@ export function createApiServer({
   extraOrigins = process.env.CORS_ALLOWED_ORIGINS,
   getDb = getDB,
   nowFn = () => new Date(),
+  getUserAccessFn = getUserAccess,
+  updateUserProgressFn = updateUserProgress,
+  getUserFullDataFn = getUserFullData,
+  kaspiLink = process.env.KASPI_LINK || 'https://pay.kaspi.kz/pay/ygtke7vw',
+  botUsername = process.env.BOT_USERNAME || 'imantap_bot',
 } = {}) {
   const allowedOrigins = buildAllowedOrigins({ miniAppUrl, nodeEnv, extraOrigins });
 
@@ -181,7 +226,7 @@ export function createApiServer({
       if (!requireCurrentUser(userId)) return;
       
       try {
-        const access = await getUserAccess(userId);
+        const access = await getUserAccessFn(userId, { db: getDb(), now: nowFn() });
         console.log(`✅ API /check-access: userId=${userId}, hasAccess=${access.hasAccess}, status=${access.paymentStatus}`);
         
         res.statusCode = 200;
@@ -190,13 +235,19 @@ export function createApiServer({
           hasAccess: access.hasAccess,
           paymentStatus: access.paymentStatus,
           demoExpires: access.demoExpires,
-          reason: access.reason
+          subscriptionExpires: access.subscriptionExpires,
+          daysLeft: access.daysLeft,
+          paymentPending: access.paymentPending,
+          subscriptionExpired: access.subscriptionExpired,
+          reason: access.reason,
+          kaspiLink,
+          botUsername,
         }));
         return;
       } catch (error) {
         console.error('❌ API Error /check-access:', error);
         res.statusCode = 500;
-        res.end(JSON.stringify({ success: false, error: error.message }));
+        res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
         return;
       }
     }
@@ -213,13 +264,20 @@ export function createApiServer({
       if (!requireCurrentUser(userId)) return;
 
       try {
-        const access = await getUserAccess(userId);
+        const access = await getUserAccessFn(userId, { db: getDb(), now: nowFn() });
         res.statusCode = 200;
         res.end(JSON.stringify({
           success: true,
           hasAccess: access.hasAccess,
           paymentStatus: access.paymentStatus,
-          demoExpires: access.demoExpires
+          demoExpires: access.demoExpires,
+          subscriptionExpires: access.subscriptionExpires,
+          daysLeft: access.daysLeft,
+          paymentPending: access.paymentPending,
+          subscriptionExpired: access.subscriptionExpired,
+          reason: access.reason,
+          kaspiLink,
+          botUsername,
         }));
         return;
       } catch (error) {
@@ -269,11 +327,15 @@ export function createApiServer({
           return;
         }
 
+        // Defense-in-depth: сбрасываем все платные, подписочные, демо- и админ-поля до передачи в сервис.
+        const sanitizedData = sanitizeSyncPayload(progressData);
+
         try {
-          const result = await updateUserProgress(userId, progressData);
+          const db = getDb();
+          const result = await updateUserProgressFn(userId, sanitizedData, { db, now: nowFn() });
 
           if (result?.conflict) {
-            const updatedData = await getUserFullData(userId);
+            const updatedData = await getUserFullDataFn(userId, { db, now: nowFn() });
             res.statusCode = 409;
             res.end(JSON.stringify({
               success: false,
@@ -286,7 +348,7 @@ export function createApiServer({
 
           if (result && result.success) {
             console.log(`✅ Синк для ${userId}, начислено: ${result.xpAdded} XP`);
-            const updatedData = await getUserFullData(userId);
+            const updatedData = await getUserFullDataFn(userId, { db, now: nowFn() });
             res.statusCode = 200;
             res.end(JSON.stringify({ 
               success: true, 

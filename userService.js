@@ -681,11 +681,15 @@ async function _updateUserProgressLocked(userId, progressData, deps = {}) {
 /**
  * Получить полные данные для Mini App
  */
-async function getUserFullData(userId) {
+async function getUserFullData(userId, deps = {}) {
   try {
-    const db = getDB();
-    const user = await db.collection('users').findOne({ userId: parseInt(userId) });
+    const db = deps.db || getDB();
+    const user = await db.collection('users').findOne({ userId: parseInt(userId, 10) });
     if (!user) return null;
+
+    const now = deps.now ? new Date(deps.now) : new Date();
+    const subExpires = user.subscriptionExpiresAt ? new Date(user.subscriptionExpiresAt) : null;
+    const hasValidSubExpires = subExpires && !Number.isNaN(subExpires.getTime());
 
     return {
       userId: user.userId,
@@ -697,6 +701,9 @@ async function getUserFullData(userId) {
       photoUrl: user.photoUrl,
       startDate: user.startDate,
       registrationDate: user.createdAt || user.registrationDate,
+      paymentStatus: user.paymentStatus || 'unpaid',
+      accessType: user.accessType || null,
+      demoExpiresAt: user.demoExpiresAt || null,
       progress: user.progress || {},
       preparationProgress: user.preparationProgress || {},
       basicProgress: user.basicProgress || {},
@@ -719,9 +726,9 @@ async function getUserFullData(userId) {
       currentStreak: user.currentStreak || 0,
       longestStreak: user.longestStreak || 0,
       lastActiveDate: user.lastActiveDate || '',
-      subscriptionExpiresAt: user.subscriptionExpiresAt || null,
-      daysLeft: user.subscriptionExpiresAt
-        ? Math.ceil((new Date(user.subscriptionExpiresAt) - new Date()) / (1000 * 60 * 60 * 24))
+      subscriptionExpiresAt: hasValidSubExpires ? subExpires.toISOString() : null,
+      daysLeft: hasValidSubExpires
+        ? Math.ceil((subExpires.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
         : null,
       // ✅ ПОЛЯ v2
       dailyGoalRecords: user.dailyGoalRecords || {},
@@ -916,110 +923,326 @@ async function getReferralStats(userId, { promoCode = null, db = null } = {}) {
   };
 }
 
-async function updatePaymentStatus(userId, status, additionalData = {}) {
-  const db = getDB();
+const SUBSCRIPTION_DAYS = 90;
+const SUBSCRIPTION_DURATION_MS = SUBSCRIPTION_DAYS * 24 * 60 * 60 * 1000;
+const DEMO_DURATION_MS = 24 * 60 * 60 * 1000;
+
+async function updatePaymentStatus(userId, status, additionalData = {}, deps = {}) {
+  const uid = parseInt(userId, 10);
+  if (!Number.isInteger(uid)) return false;
+  const db = deps.db || getDB();
+  const now = deps.now ? new Date(deps.now) : new Date();
   const users = db.collection('users');
-  const result = await users.updateOne({ userId }, { $set: { paymentStatus: status, updatedAt: new Date(), ...additionalData } });
-  console.log(`💳 Статус оплаты пользователя ${userId}: ${status}`);
+  const result = await users.updateOne(
+    { userId: uid },
+    { $set: { paymentStatus: status, updatedAt: now, ...additionalData } }
+  );
+  console.log(`💳 Статус оплаты пользователя ${uid}: ${status}`);
   return result.modifiedCount > 0;
 }
 
-async function approvePayment(userId) {
-  const db = getDB();
+async function approvePayment(userId, deps = {}) {
+  const uid = parseInt(userId, 10);
+  if (!Number.isInteger(uid)) {
+    return { approved: false, alreadyProcessed: false, reason: 'invalid_user_id', subscriptionExpiresAt: null };
+  }
+
+  const db = deps.db || getDB();
+  const now = deps.now ? new Date(deps.now) : new Date();
   const users = db.collection('users');
-  const subscriptionExpiresAt = new Date();
-  subscriptionExpiresAt.setDate(subscriptionExpiresAt.getDate() + 90);
+  const defaultExpiresAt = new Date(now.getTime() + SUBSCRIPTION_DURATION_MS);
 
   // Атомарно меняем статус только если он сейчас 'pending'.
-  // Если документ не вернулся — одобрение уже было выполнено, выходим.
-  const user = await users.findOneAndUpdate(
-    { userId, paymentStatus: 'pending' },
+  // В mongodb@5.9.2 findOneAndUpdate возвращает { value, ok }, поэтому
+  // обязательно распаковываем через unwrapModifyResult.
+  const rawResult = await users.findOneAndUpdate(
+    { userId: uid, paymentStatus: 'pending' },
     {
       $set: {
-        paymentStatus: 'paid', accessType: 'full', paymentDate: new Date(),
-        subscriptionExpiresAt, subscriptionNotified3Days: false, subscriptionNotified1Day: false,
-        onboardingCompleted: true, updatedAt: new Date()
+        paymentStatus: 'paid',
+        accessType: 'full',
+        paymentDate: now,
+        subscriptionExpiresAt: defaultExpiresAt,
+        subscriptionNotified3Days: false,
+        subscriptionNotified1Day: false,
+        onboardingCompleted: true,
+        updatedAt: now,
       }
     },
     { returnDocument: 'before' }
   );
 
-  if (!user) return false; // Уже одобрено или пользователь не найден
+  const previousUser = unwrapModifyResult(rawResult);
+  if (!previousUser) {
+    return { approved: false, alreadyProcessed: true, reason: 'not_pending', subscriptionExpiresAt: null };
+  }
+
+  let finalExpiresAt = defaultExpiresAt;
+  // Если пользователь продлевает ещё активную подписку — добавляем 90 дней к текущей дате окончания.
+  if (previousUser.subscriptionExpiresAt) {
+    const prevExpiry = new Date(previousUser.subscriptionExpiresAt);
+    if (!Number.isNaN(prevExpiry.getTime()) && prevExpiry > now) {
+      finalExpiresAt = new Date(prevExpiry.getTime() + SUBSCRIPTION_DURATION_MS);
+      await users.updateOne(
+        { userId: uid },
+        { $set: { subscriptionExpiresAt: finalExpiresAt, updatedAt: now } }
+      );
+    }
+  }
+
   // XP за оплату начисляется в bot.js через claimPaymentBonus — не здесь.
-  return true;
+  return {
+    approved: true,
+    alreadyProcessed: false,
+    subscriptionExpiresAt: finalExpiresAt,
+  };
 }
 
-async function rejectPayment(userId) {
-  const db = getDB();
+async function rejectPayment(userId, deps = {}) {
+  const uid = parseInt(userId, 10);
+  if (!Number.isInteger(uid)) {
+    return { rejected: false, alreadyProcessed: false, demoStatus: 'none', demoExpiresAt: null };
+  }
+
+  const db = deps.db || getDB();
+  const now = deps.now ? new Date(deps.now) : new Date();
   const users = db.collection('users');
 
   // Атомарно меняем статус только если он сейчас 'pending'.
   // returnDocument: 'before' — читаем состояние ДО записи, чтобы правильно
-  // решить, давать ли демо. Если документ не вернулся — заявка уже отклонена.
-  const user = await users.findOneAndUpdate(
-    { userId, paymentStatus: 'pending' },
-    { $set: { paymentStatus: 'unpaid', updatedAt: new Date() } },
+  // решить, давать ли демо. Распаковываем { value, ok } через unwrapModifyResult.
+  const rawResult = await users.findOneAndUpdate(
+    { userId: uid, paymentStatus: 'pending' },
+    { $set: { paymentStatus: 'unpaid', updatedAt: now } },
     { returnDocument: 'before' }
   );
 
-  if (!user) return { demoStatus: 'none', demoExpiresAt: null }; // Уже отклонено
-
-  let demoExpiresAt = null, accessType = null, demoStatus = 'none';
-  if (user.accessType === 'demo' && user.demoExpiresAt && new Date() < new Date(user.demoExpiresAt)) {
-    demoExpiresAt = user.demoExpiresAt; accessType = 'demo'; demoStatus = 'active';
-  } else if (user.demoGivenOnRejection || user.demoActivatedManually) {
-    demoStatus = 'none';
-  } else {
-    demoExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    accessType = 'demo'; demoStatus = 'given_new';
+  const previousUser = unwrapModifyResult(rawResult);
+  if (!previousUser) {
+    // Уже отклонено, уже одобрено или пользователь не найден — НЕ трогаем accessType/demoExpiresAt!
+    return { rejected: false, alreadyProcessed: true, demoStatus: 'none', demoExpiresAt: null };
   }
 
-  await users.updateOne({ userId }, {
+  // Если пользователь пытался продлить ещё активную подписку — сохраняем оставшийся доступ.
+  const prevSubExpiry = previousUser.subscriptionExpiresAt ? new Date(previousUser.subscriptionExpiresAt) : null;
+  if (prevSubExpiry && !Number.isNaN(prevSubExpiry.getTime()) && prevSubExpiry > now) {
+    await users.updateOne(
+      { userId: uid },
+      { $set: { paymentStatus: 'paid', accessType: 'full', updatedAt: now } }
+    );
+    return { rejected: true, alreadyProcessed: false, demoStatus: 'none', demoExpiresAt: null };
+  }
+
+  const nextPaymentStatus = (prevSubExpiry && !Number.isNaN(prevSubExpiry.getTime()) && prevSubExpiry <= now)
+    ? 'subscription_expired'
+    : 'unpaid';
+
+  let demoExpiresAt = previousUser.demoExpiresAt ? new Date(previousUser.demoExpiresAt) : null;
+  let accessType = null;
+  let demoStatus = 'none';
+
+  const hasActiveDemo = previousUser.accessType === 'demo'
+    && demoExpiresAt
+    && !Number.isNaN(demoExpiresAt.getTime())
+    && now < demoExpiresAt;
+
+  if (hasActiveDemo) {
+    accessType = 'demo';
+    demoStatus = 'active';
+  } else if (previousUser.demoGivenOnRejection || previousUser.demoActivatedManually || previousUser.paymentDate) {
+    demoStatus = 'none';
+    accessType = null;
+  } else {
+    demoExpiresAt = new Date(now.getTime() + DEMO_DURATION_MS);
+    accessType = 'demo';
+    demoStatus = 'given_new';
+  }
+
+  await users.updateOne({ userId: uid }, {
     $set: {
-      accessType, demoExpiresAt,
-      demoGivenOnRejection: demoStatus === 'given_new' ? true : user.demoGivenOnRejection,
-      updatedAt: new Date()
+      paymentStatus: nextPaymentStatus,
+      accessType,
+      demoExpiresAt,
+      demoGivenOnRejection: demoStatus === 'given_new' ? true : Boolean(previousUser.demoGivenOnRejection),
+      ...(demoStatus === 'given_new' ? { demoExpiredNotified: false } : {}),
+      updatedAt: now
     }
   });
-  return { demoStatus, demoExpiresAt };
+
+  return { rejected: true, alreadyProcessed: false, demoStatus, demoExpiresAt };
 }
 
-async function getPendingPayments() {
-  return await getDB().collection('users').find({ paymentStatus: 'pending' }).toArray();
-}
-
-async function checkDemoExpiration(userId) {
-  const user = await getDB().collection('users').findOne({ userId });
-  if (!user || user.accessType !== 'demo') return false;
-  return new Date(user.demoExpiresAt) < new Date();
-}
-
-async function getUserAccess(userId) {
-  const MAIN_ADMIN = parseInt(process.env.MAIN_ADMIN_ID);
-  if (userId === MAIN_ADMIN) return { hasAccess: true, paymentStatus: 'paid', reason: 'admin_access' };
-  const user = await getDB().collection('users').findOne({ userId });
-  if (!user) return { hasAccess: false, paymentStatus: 'unpaid', reason: 'user_not_found' };
-  if (user.accessType === 'demo' && user.demoExpiresAt) {
-    const expiresAt = new Date(user.demoExpiresAt);
-    if (expiresAt > new Date()) return { hasAccess: true, paymentStatus: 'demo', demoExpires: expiresAt.toISOString() };
-    return { hasAccess: false, paymentStatus: 'unpaid', reason: 'demo_expired' };
+/**
+ * Атомарно активирует разовый 24-часовой демо-доступ вручную.
+ * Защищает от повторного получения демо после истечения (проверяет demoActivatedManually и demoGivenOnRejection).
+ */
+async function activateManualDemo(userId, deps = {}) {
+  const uid = parseInt(userId, 10);
+  if (!Number.isInteger(uid)) {
+    return { activated: false, reason: 'invalid_user_id', demoExpiresAt: null };
   }
+
+  const db = deps.db || getDB();
+  const now = deps.now ? new Date(deps.now) : new Date();
+  const users = db.collection('users');
+  const demoExpiresAt = new Date(now.getTime() + DEMO_DURATION_MS);
+
+  const rawResult = await users.findOneAndUpdate(
+    {
+      userId: uid,
+      paymentStatus: { $ne: 'paid' },
+      demoGivenOnRejection: { $ne: true },
+      demoActivatedManually: { $ne: true },
+    },
+    {
+      $set: {
+        accessType: 'demo',
+        demoExpiresAt,
+        onboardingCompleted: true,
+        paymentStatus: 'unpaid',
+        demoActivatedManually: true,
+        demoExpiredNotified: false,
+        updatedAt: now,
+      }
+    },
+    { returnDocument: 'after' }
+  );
+
+  const updated = unwrapModifyResult(rawResult);
+  if (updated) {
+    return { activated: true, reason: 'activated', demoExpiresAt };
+  }
+
+  const existing = await users.findOne({ userId: uid });
+  if (!existing) {
+    return { activated: false, reason: 'user_not_found', demoExpiresAt: null };
+  }
+  if (existing.paymentStatus === 'paid') {
+    return { activated: false, reason: 'already_paid', demoExpiresAt: null };
+  }
+  if (existing.accessType === 'demo' && existing.demoExpiresAt && now < new Date(existing.demoExpiresAt)) {
+    return { activated: false, reason: 'already_active', demoExpiresAt: new Date(existing.demoExpiresAt) };
+  }
+  return { activated: false, reason: 'already_used', demoExpiresAt: existing.demoExpiresAt ? new Date(existing.demoExpiresAt) : null };
+}
+
+async function getPendingPayments(deps = {}) {
+  const db = deps.db || getDB();
+  return await db.collection('users').find({ paymentStatus: 'pending' }).toArray();
+}
+
+async function checkDemoExpiration(userId, deps = {}) {
+  const uid = parseInt(userId, 10);
+  if (!Number.isInteger(uid)) return false;
+  const db = deps.db || getDB();
+  const now = deps.now ? new Date(deps.now) : new Date();
+  const user = await db.collection('users').findOne({ userId: uid });
+  if (!user || user.accessType !== 'demo' || !user.demoExpiresAt) return false;
+  const expiresAt = new Date(user.demoExpiresAt);
+  if (Number.isNaN(expiresAt.getTime())) return false;
+  return expiresAt <= now;
+}
+
+async function getUserAccess(userId, deps = {}) {
+  const uid = parseInt(userId, 10);
+  if (!Number.isInteger(uid)) {
+    return { hasAccess: false, paymentStatus: 'unpaid', reason: 'invalid_user_id' };
+  }
+
+  const mainAdminRaw = process.env.MAIN_ADMIN_ID;
+  const mainAdmin = mainAdminRaw ? parseInt(String(mainAdminRaw).trim(), 10) : NaN;
+  if (Number.isInteger(mainAdmin) && uid === mainAdmin) {
+    return { hasAccess: true, paymentStatus: 'paid', reason: 'admin_access' };
+  }
+
+  const db = deps.db || getDB();
+  const now = deps.now ? new Date(deps.now) : new Date();
+  const user = await db.collection('users').findOne({ userId: uid });
+  if (!user) return { hasAccess: false, paymentStatus: 'unpaid', reason: 'user_not_found' };
+
+  // 1. Активная оплаченная подписка (всегда имеет приоритет над старыми demo-полями)
   if (user.paymentStatus === 'paid') {
     if (user.subscriptionExpiresAt) {
-      const now = new Date(), expiresAt = new Date(user.subscriptionExpiresAt);
-      if (now < expiresAt) {
-        return { hasAccess: true, paymentStatus: 'paid', subscriptionExpires: user.subscriptionExpiresAt, daysLeft: Math.ceil((expiresAt - now) / (1000 * 60 * 60 * 24)) };
+      const expiresAt = new Date(user.subscriptionExpiresAt);
+      if (!Number.isNaN(expiresAt.getTime())) {
+        if (now < expiresAt) {
+          return {
+            hasAccess: true,
+            paymentStatus: 'paid',
+            subscriptionExpires: expiresAt.toISOString(),
+            daysLeft: Math.ceil((expiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)),
+          };
+        }
+        return {
+          hasAccess: false,
+          paymentStatus: 'subscription_expired',
+          reason: 'subscription_expired',
+          subscriptionExpires: expiresAt.toISOString(),
+          subscriptionExpired: true,
+        };
       }
-      return { hasAccess: false, paymentStatus: 'subscription_expired', reason: 'Подписка истекла', subscriptionExpired: true };
     }
     return { hasAccess: true, paymentStatus: 'paid', reason: 'legacy_user' };
   }
+
+  // 2. Чек на проверке (если есть ещё активная подписка или активный демо — сохраняем доступ,
+  //    иначе показываем экран ожидания PendingScreen, даже если ранее был истёкший демо)
   if (user.paymentStatus === 'pending') {
-    if (user.accessType === 'demo' && user.demoExpiresAt && new Date() < new Date(user.demoExpiresAt))
-      return { hasAccess: true, paymentStatus: 'demo', demoExpires: user.demoExpiresAt, paymentPending: true };
+    if (user.subscriptionExpiresAt) {
+      const subExpires = new Date(user.subscriptionExpiresAt);
+      if (!Number.isNaN(subExpires.getTime()) && now < subExpires) {
+        return {
+          hasAccess: true,
+          paymentStatus: 'paid',
+          subscriptionExpires: subExpires.toISOString(),
+          daysLeft: Math.ceil((subExpires.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)),
+          paymentPending: true,
+        };
+      }
+    }
+    if (user.accessType === 'demo' && user.demoExpiresAt) {
+      const demoExpires = new Date(user.demoExpiresAt);
+      if (!Number.isNaN(demoExpires.getTime()) && now < demoExpires) {
+        return {
+          hasAccess: true,
+          paymentStatus: 'demo',
+          demoExpires: demoExpires.toISOString(),
+          paymentPending: true,
+        };
+      }
+    }
     return { hasAccess: false, paymentStatus: 'pending', reason: 'payment_pending' };
   }
-  if (user.paymentStatus === 'subscription_expired') return { hasAccess: false, paymentStatus: 'subscription_expired', reason: 'subscription_expired' };
+
+  // 3. Демо-доступ
+  if (user.accessType === 'demo' && user.demoExpiresAt) {
+    const expiresAt = new Date(user.demoExpiresAt);
+    if (!Number.isNaN(expiresAt.getTime()) && now < expiresAt) {
+      return { hasAccess: true, paymentStatus: 'demo', demoExpires: expiresAt.toISOString() };
+    }
+    if (user.paymentStatus === 'subscription_expired') {
+      return {
+        hasAccess: false,
+        paymentStatus: 'subscription_expired',
+        reason: 'subscription_expired',
+        subscriptionExpires: user.subscriptionExpiresAt ? new Date(user.subscriptionExpiresAt).toISOString() : undefined,
+        subscriptionExpired: true,
+      };
+    }
+    return { hasAccess: false, paymentStatus: 'unpaid', reason: 'demo_expired' };
+  }
+
+  // 4. Истёкшая подписка
+  if (user.paymentStatus === 'subscription_expired') {
+    return {
+      hasAccess: false,
+      paymentStatus: 'subscription_expired',
+      reason: 'subscription_expired',
+      subscriptionExpires: user.subscriptionExpiresAt ? new Date(user.subscriptionExpiresAt).toISOString() : undefined,
+      subscriptionExpired: true,
+    };
+  }
+
   return { hasAccess: false, paymentStatus: 'unpaid', reason: 'not_paid' };
 }
 
@@ -1237,11 +1460,12 @@ async function claimPaymentBonus(userId, deps = {}) {
 
 export {
   XP_VALUES, GOAL_CATEGORY_MAX_XP, LEGACY_GOAL_CATEGORY_MAP, TASBEEH_XP,
+  SUBSCRIPTION_DAYS, DEMO_DURATION_MS,
   normalizeGoalCategoryId, isMondayOrThursday, unwrapModifyResult,
   getOrCreateUser, getUserById, getUserByPromoCode, incrementReferralCount,
   updateUserProgress, getUserFullData, updateUserOnboarding, checkPromoCode,
   redeemReferralCode, getReferralStats,
-  updatePaymentStatus, approvePayment, rejectPayment, getUserAccess,
+  updatePaymentStatus, approvePayment, rejectPayment, activateManualDemo, getUserAccess,
   getPendingPayments, checkDemoExpiration, addUserXP, getGlobalLeaderboard,
   getUserRank, getFriendsLeaderboard, getCountries, getCities,
   getFilteredLeaderboard, addReferralXP, claimReferralBonus, claimPaymentBonus
