@@ -251,8 +251,22 @@ export function createApiServer({
       });
       
       req.on('end', async () => {
+        let progressData;
         try {
-          const progressData = JSON.parse(body);
+          progressData = JSON.parse(body);
+        } catch {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ success: false, error: 'Invalid JSON' }));
+          return;
+        }
+
+        if (!progressData || typeof progressData !== 'object' || Array.isArray(progressData)) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ success: false, error: 'Invalid payload' }));
+          return;
+        }
+
+        try {
           const result = await updateUserProgress(userId, progressData);
 
           if (result?.conflict) {
@@ -281,9 +295,10 @@ export function createApiServer({
             res.statusCode = 500;
             res.end(JSON.stringify({ success: false, error: 'Failed to update progress' }));
           }
-        } catch (parseError) {
-          res.statusCode = 400;
-          res.end(JSON.stringify({ success: false, error: 'Invalid JSON' }));
+        } catch (error) {
+          console.error('❌ API Error /sync:', error);
+          res.statusCode = 500;
+          res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
         }
       });
       
@@ -334,7 +349,8 @@ export function createApiServer({
     if (url.pathname.match(/^\/api\/leaderboard\/friends\/\d+$/)) {
       try {
         const userId = parseInt(url.pathname.split('/')[4]);
-        const limit = parseInt(url.searchParams.get('limit') || '20');
+        const rawLimit = parseInt(url.searchParams.get('limit') || '20', 10);
+        const limit = Math.min(Math.max(Number.isFinite(rawLimit) ? rawLimit : 20, 1), 100);
         
         if (!userId) {
           res.statusCode = 400;
@@ -441,8 +457,10 @@ export function createApiServer({
     // API: Лидерборд с фильтрами (обновлённый /api/leaderboard/global)
     if (url.pathname === '/api/leaderboard/global') {
       try {
-        const limit = parseInt(url.searchParams.get('limit')) || 50;
-        const offset = parseInt(url.searchParams.get('offset')) || 0;
+        const rawLimit = parseInt(url.searchParams.get('limit') || '50', 10);
+        const rawOffset = parseInt(url.searchParams.get('offset') || '0', 10);
+        const limit = Math.min(Math.max(Number.isFinite(rawLimit) ? rawLimit : 50, 1), 100);
+        const offset = Math.max(Number.isFinite(rawOffset) ? rawOffset : 0, 0);
         const country = url.searchParams.get('country') || null;
         const city = url.searchParams.get('city') || null;
         

@@ -19,14 +19,53 @@ const XP_VALUES = {
 };
 
 // ─── ДОПУСТИМЫЕ XP ЗА КАТЕГОРИИ ЦЕЛЕЙ (v2) ───
+// Синхронизировано с GoalCategoryId и GOAL_CATEGORIES (imantap mini app/constants.ts)
 const GOAL_CATEGORY_MAX_XP = {
-  prayer:    150,
-  quran:     200,
-  dhikr:     100,
-  fasting:   200,
-  charity:   150,
-  selfdev:   100,
+  namaz:  80,
+  quran:  150,
+  sadaqa: 100,
+  dhikr:  70,
+  ilm:    60,
+  akhlaq: 80,
 };
+
+// Обратная совместимость со старыми ключами категорий в БД
+const LEGACY_GOAL_CATEGORY_MAP = {
+  prayer:  'namaz',
+  charity: 'sadaqa',
+  selfdev: 'ilm',
+};
+
+const TASBEEH_XP = {
+  subhanallah: 33,
+  alhamdulillah: 33,
+  allahuakbar: 33,
+  astaghfirullah: 100,
+  lailaha: 100,
+  salavat: 100,
+};
+
+function normalizeGoalCategoryId(categoryId) {
+  if (typeof categoryId !== 'string') return null;
+  const trimmed = categoryId.trim();
+  if (!trimmed) return null;
+  if (Object.prototype.hasOwnProperty.call(GOAL_CATEGORY_MAX_XP, trimmed)) {
+    return trimmed;
+  }
+  if (Object.prototype.hasOwnProperty.call(LEGACY_GOAL_CATEGORY_MAP, trimmed)) {
+    return LEGACY_GOAL_CATEGORY_MAP[trimmed];
+  }
+  return null;
+}
+
+function addDaysToIsoDate(startDateStr, offsetDays) {
+  const [y, m, d] = startDateStr.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + offsetDays)).toISOString().slice(0, 10);
+}
+
+function isValidDailyTaskKey(taskKey) {
+  return taskKey !== 'singleName' && Object.prototype.hasOwnProperty.call(XP_VALUES, taskKey);
+}
 
 /**
  * #B3 FIX: Получить «сегодня» в таймзоне пользователя.
@@ -44,12 +83,12 @@ function isMondayOrThursday(dateStr, timezone) {
   return dow === 'Mon' || dow === 'Thu';
 }
 
-function getTodayStr(timezone) {
+function getTodayStr(timezone, nowDate = new Date()) {
   const tz = timezone || 'Asia/Almaty';
   try {
-    return new Date().toLocaleDateString('en-CA', { timeZone: tz });
+    return nowDate.toLocaleDateString('en-CA', { timeZone: tz });
   } catch {
-    return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Almaty' });
+    return nowDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Almaty' });
   }
 }
 
@@ -114,10 +153,10 @@ async function getOrCreateUser(userId, username = null) {
       hasRedeemedReferral: false,
       // ✅ ПОЛЯ Мақсаттар v2
       dailyGoalRecords: {},      // { '2026-03-01': [ DailyGoalRecord, ... ] }
-      goalCustomItems: {},        // { prayer: [ CustomGoalItem, ... ] }
+      goalCustomItems: {},        // { namaz: [ CustomGoalItem, ... ] }
       // FIX #B1: goalStreaks хранит объекты { current, longest, lastCompletedDate }
-      goalStreaks: {},             // { prayer: { current:3, longest:5, lastCompletedDate:'2026-03-01' }, ... }
-      earnedGoalXp: {},           // { '2026-03-01': { prayer: true, quran: true } }
+      goalStreaks: {},             // { namaz: { current:3, longest:5, lastCompletedDate:'2026-03-01' }, ... }
+      earnedGoalXp: {},           // { '2026-03-01': { namaz: true, quran: true } }
       tasbeehRecords: {},
       earnedTasbeehXp: {},
       tasbeehTotals: {},
@@ -177,13 +216,14 @@ async function incrementReferralCount(promoCode) {
  * Обновить полный прогресс пользователя (sync endpoint)
  * Обёрнуто в _withUserLock — конкурентные запросы одного userId выполняются строго по очереди.
  */
-async function updateUserProgress(userId, progressData) {
-  return withUserLock(userId, () => _updateUserProgressLocked(userId, progressData));
+async function updateUserProgress(userId, progressData, deps = {}) {
+  return withUserLock(userId, () => _updateUserProgressLocked(userId, progressData, deps));
 }
 
-async function _updateUserProgressLocked(userId, progressData) {
+async function _updateUserProgressLocked(userId, progressData, deps = {}) {
   try {
-    const db = getDB();
+    const db = deps.db || getDB();
+    const addContestXpFn = deps.addContestXp || addContestXp;
     const usersCollection = db.collection('users');
 
     const oldUser = await usersCollection.findOne({ userId: parseInt(userId) });
@@ -201,28 +241,29 @@ async function _updateUserProgressLocked(userId, progressData) {
 
     // FIX #B3: используем безопасную функцию getTodayStr
     const userTimezone = oldUser.location?.timezone || 'Asia/Almaty';
-    const todayDateStr = getTodayStr(userTimezone);
-    const now = new Date();
+    const now = deps.now ? new Date(deps.now) : new Date();
+    const todayDateStr = getTodayStr(userTimezone, now);
 
     let xpToAdd = 0;
     const earnedTasksFromDB = oldUser.earnedTasks || {};
     const todayEarned = [...(earnedTasksFromDB[todayDateStr] || [])];
+    const streakMultiplier = Math.min(1 + ((oldUser.currentStreak || 0) * 0.1), 3.0);
 
     // ─── XP за Ramadan прогресс ───
     if (progressData.progress) {
       const oldProgress = oldUser.progress || {};
       for (const day in progressData.progress) {
-        const dayNum = parseInt(day);
+        const dayNum = parseInt(day, 10);
+        if (!Number.isInteger(dayNum) || dayNum < 1) continue;
         const newDayData = progressData.progress[day];
+        if (!newDayData || typeof newDayData !== 'object') continue;
         const oldDayData = oldProgress[day] || {};
-        const [rY, rM, rD] = RAMADAN_START_DATE.split('-').map(Number);
-        const ramadanDay = new Date(rY, rM - 1, rD + (dayNum - 1));
-        const dayDateStr = ramadanDay.toLocaleDateString('en-CA', { timeZone: userTimezone });
+        const dayDateStr = addDaysToIsoDate(RAMADAN_START_DATE, dayNum - 1);
         if (dayDateStr === todayDateStr) {
           for (const taskKey in newDayData) {
+            if (!isValidDailyTaskKey(taskKey)) continue;
             if (newDayData[taskKey] === true && !oldDayData[taskKey] && !todayEarned.includes(taskKey)) {
-              const baseXP = XP_VALUES[taskKey] || 10;
-              const streakMultiplier = Math.min(1 + ((oldUser.currentStreak || 0) * 0.1), 3.0);
+              const baseXP = XP_VALUES[taskKey];
               xpToAdd += Math.floor(baseXP * streakMultiplier);
               todayEarned.push(taskKey);
               console.log(`✅ +${Math.floor(baseXP * streakMultiplier)} XP за ${taskKey}`);
@@ -236,14 +277,15 @@ async function _updateUserProgressLocked(userId, progressData) {
     if (progressData.preparationProgress) {
       const oldPrep = oldUser.preparationProgress || {};
       for (const day in progressData.preparationProgress) {
-        const dayNum = parseInt(day);
+        const dayNum = parseInt(day, 10);
+        if (!Number.isInteger(dayNum) || dayNum < 1) continue;
         const newDayData = progressData.preparationProgress[day];
+        if (!newDayData || typeof newDayData !== 'object') continue;
         const oldDayData = oldPrep[day] || {};
-        const [pY, pM, pD] = PREPARATION_START_DATE.split('-').map(Number);
-        const prepDay = new Date(pY, pM - 1, pD + (dayNum - 1));
-        const dayDateStr = prepDay.toLocaleDateString('en-CA', { timeZone: userTimezone });
+        const dayDateStr = addDaysToIsoDate(PREPARATION_START_DATE, dayNum - 1);
         if (dayDateStr === todayDateStr) {
           for (const taskKey in newDayData) {
+            if (!isValidDailyTaskKey(taskKey)) continue;
             if (newDayData[taskKey] === true && !oldDayData[taskKey] && !todayEarned.includes(taskKey)) {
               let baseXP;
               if (taskKey === 'fasting') {
@@ -253,9 +295,8 @@ async function _updateUserProgressLocked(userId, progressData) {
                 }
                 baseXP = 50;
               } else {
-                baseXP = XP_VALUES[taskKey] || 10;
+                baseXP = XP_VALUES[taskKey];
               }
-              const streakMultiplier = Math.min(1 + ((oldUser.currentStreak || 0) * 0.1), 3.0);
               xpToAdd += Math.floor(baseXP * streakMultiplier);
               todayEarned.push(taskKey);
             }
@@ -270,8 +311,10 @@ async function _updateUserProgressLocked(userId, progressData) {
       for (const dateKey in progressData.basicProgress) {
         if (dateKey === todayDateStr) {
           const newDayData = progressData.basicProgress[dateKey];
+          if (!newDayData || typeof newDayData !== 'object') continue;
           const oldDayData = oldBasic[dateKey] || {};
           for (const taskKey in newDayData) {
+            if (!isValidDailyTaskKey(taskKey)) continue;
             if (newDayData[taskKey] === true && !oldDayData[taskKey] && !todayEarned.includes(taskKey)) {
               let baseXP;
               if (taskKey === 'fasting') {
@@ -281,9 +324,8 @@ async function _updateUserProgressLocked(userId, progressData) {
                 }
                 baseXP = 50;
               } else {
-                baseXP = XP_VALUES[taskKey] || 10;
+                baseXP = XP_VALUES[taskKey];
               }
-              const streakMultiplier = Math.min(1 + ((oldUser.currentStreak || 0) * 0.1), 3.0);
               xpToAdd += Math.floor(baseXP * streakMultiplier);
               todayEarned.push(taskKey);
             }
@@ -297,49 +339,49 @@ async function _updateUserProgressLocked(userId, progressData) {
     const mergedEarnedGoalXp = { ...(oldUser.earnedGoalXp || {}) };
     if (progressData.dailyGoalRecords) {
       const todayEarnedGoals = { ...(mergedEarnedGoalXp[todayDateStr] || {}) };
+      // Обратная совместимость: старые legacy-ключи в БД блокируют повторное начисление по каноническим
+      for (const [legacyKey, canonicalKey] of Object.entries(LEGACY_GOAL_CATEGORY_MAP)) {
+        if (todayEarnedGoals[legacyKey]) {
+          todayEarnedGoals[canonicalKey] = true;
+        }
+      }
 
       const incomingToday = progressData.dailyGoalRecords[todayDateStr];
       if (Array.isArray(incomingToday)) {
         for (const record of incomingToday) {
+          if (!record || typeof record !== 'object') continue;
           const { categoryId, completed, xpEarned } = record;
+          const canonicalCategoryId = normalizeGoalCategoryId(categoryId);
 
+          // Защита 0: только допустимые категории Goals v2 (и legacy-алиасы)
+          if (!canonicalCategoryId) {
+            console.log(`🛡️ Блок: неизвестная категория цели ${categoryId}`);
+            continue;
+          }
           // Защита 1: категория уже зачтена сегодня
-          if (todayEarnedGoals[categoryId]) {
-            console.log(`🛡️ Блок: повторное начисление XP за ${categoryId} — уже зачтено сегодня`);
+          if (todayEarnedGoals[canonicalCategoryId]) {
+            console.log(`🛡️ Блок: повторное начисление XP за ${canonicalCategoryId} — уже зачтено сегодня`);
             continue;
           }
           // Защита 2: только completed
           if (!completed) continue;
           // Защита 3: maxXP по категории
-          const maxXp = GOAL_CATEGORY_MAX_XP[categoryId] || 100;
-          const safeXp = Math.min(Math.max(parseInt(xpEarned) || 0, 0), maxXp);
+          const maxXp = GOAL_CATEGORY_MAX_XP[canonicalCategoryId];
+          const safeXp = Math.min(Math.max(parseInt(xpEarned, 10) || 0, 0), maxXp);
           if (safeXp <= 0) continue;
 
-          const streakMultiplier = Math.min(1 + ((oldUser.currentStreak || 0) * 0.1), 3.0);
           const finalXp = Math.floor(safeXp * streakMultiplier);
           xpToAdd += finalXp;
-          todayEarnedGoals[categoryId] = true;
-          console.log(`🎯 +${finalXp} XP за цель категории ${categoryId} (x${streakMultiplier.toFixed(2)})`);
+          todayEarnedGoals[canonicalCategoryId] = true;
+          console.log(`🎯 +${finalXp} XP за цель категории ${canonicalCategoryId} (x${streakMultiplier.toFixed(2)})`);
         }
       }
       // Записываем обновлённый earnedGoalXp один раз
       mergedEarnedGoalXp[todayDateStr] = todayEarnedGoals;
     }
 
-    // ─── ОБНОВЛЕНИЕ СТРИКА ───
-    const lastActiveDate = oldUser.lastActiveDate || '';
-    const yesterdayStr = new Date(now.getTime() - 86400000)
-      .toLocaleDateString('en-CA', { timeZone: userTimezone });
-    let newStreak = oldUser.currentStreak || 0;
-    const hasActivityToday = xpToAdd > 0;
-    if (hasActivityToday) {
-      if (lastActiveDate === yesterdayStr) newStreak += 1;
-      else if (lastActiveDate !== todayDateStr) newStreak = 1;
-    }
-    const longestStreak = Math.max(oldUser.longestStreak || 0, newStreak);
-
     // ─── ОБЪЕКТ ОБНОВЛЕНИЯ ───
-    const updateFields = { updatedAt: new Date() };
+    const updateFields = { updatedAt: now };
     const shouldUpdate = (value) => {
       if (value === undefined || value === null) return false;
       if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) return false;
@@ -365,17 +407,23 @@ async function _updateUserProgressLocked(userId, progressData) {
     if (shouldUpdate(progressData.basicProgress)) updateFields.basicProgress = progressData.basicProgress;
 
     // Стрик-множитель для духовных практик (как и для намаза)
-    const streakMultiplierSpiritual = Math.min(1 + ((oldUser.currentStreak || 0) * 0.1), 3.0);
+    const streakMultiplierSpiritual = streakMultiplier;
 
-    // memorizedNames — только растёт
+    // memorizedNames — только растёт, валидные ID 1..99
     if (progressData.memorizedNames !== undefined) {
-      const oldMemorized = oldUser.memorizedNames || [];
-      const incoming = progressData.memorizedNames || [];
+      const oldMemorized = (oldUser.memorizedNames || [])
+        .map(id => Number(id))
+        .filter(id => Number.isInteger(id) && id >= 1 && id <= 99);
+      const incoming = Array.isArray(progressData.memorizedNames)
+        ? progressData.memorizedNames
+            .map(id => Number(id))
+            .filter(id => Number.isInteger(id) && id >= 1 && id <= 99)
+        : [];
       const merged = [...new Set([...oldMemorized, ...incoming])];
       updateFields.memorizedNames = merged;
       const newlyMemorized = merged.filter(id => !oldMemorized.includes(id));
       if (newlyMemorized.length > 0) {
-        const nameXp = Math.floor(newlyMemorized.length * 100 * streakMultiplierSpiritual);
+        const nameXp = Math.floor(newlyMemorized.length * XP_VALUES.singleName * streakMultiplierSpiritual);
         xpToAdd += nameXp;
         console.log(`📿 +${nameXp} XP за новые имена (x${streakMultiplierSpiritual.toFixed(2)})`);
       }
@@ -384,8 +432,14 @@ async function _updateUserProgressLocked(userId, progressData) {
     if (progressData.completedJuzs !== undefined) updateFields.completedJuzs = progressData.completedJuzs;
 
     if (progressData.earnedJuzXpIds !== undefined) {
-      const oldEarned = oldUser.earnedJuzXpIds || [];
-      const incoming = progressData.earnedJuzXpIds || [];
+      const oldEarned = (oldUser.earnedJuzXpIds || [])
+        .map(id => Number(id))
+        .filter(id => Number.isInteger(id) && id >= 1 && id <= 30);
+      const incoming = Array.isArray(progressData.earnedJuzXpIds)
+        ? progressData.earnedJuzXpIds
+            .map(id => Number(id))
+            .filter(id => Number.isInteger(id) && id >= 1 && id <= 30)
+        : [];
       const merged = [...new Set([...oldEarned, ...incoming])];
       updateFields.earnedJuzXpIds = merged;
       const newlyEarned = merged.filter(id => !oldEarned.includes(id));
@@ -398,13 +452,15 @@ async function _updateUserProgressLocked(userId, progressData) {
 
     if (progressData.quranKhatams !== undefined) {
       const oldKhatams = oldUser.quranKhatams || 0;
-      const newKhatams = progressData.quranKhatams || 0;
-      if (newKhatams > oldKhatams && oldKhatams === 0) {
+      const parsedNewKhatams = Math.max(0, parseInt(progressData.quranKhatams, 10) || 0);
+      const safeKhatams = Math.max(oldKhatams, parsedNewKhatams);
+      if (safeKhatams > oldKhatams && oldKhatams === 0 && oldUser.earnedFirstKhatamXp !== true) {
         const khatamXp = Math.floor(1000 * streakMultiplierSpiritual);
         xpToAdd += khatamXp;
+        updateFields.earnedFirstKhatamXp = true;
         console.log(`🕋 +${khatamXp} XP за первый хатым! (x${streakMultiplierSpiritual.toFixed(2)})`);
       }
-      updateFields.quranKhatams = newKhatams;
+      updateFields.quranKhatams = safeKhatams;
     }
 
     if (progressData.completedTasks !== undefined) updateFields.completedTasks = progressData.completedTasks;
@@ -438,12 +494,28 @@ async function _updateUserProgressLocked(userId, progressData) {
           // Сегодня: защита записей, за которые уже начислен XP
           const earnedToday = earnedGoalXpNow[todayDateStr] || {};
           const existingToday = oldRecords[todayDateStr] || [];
-          const protectedRecords = incomingArr.map(rec => {
-            if (earnedToday[rec.categoryId]) {
-              return existingToday.find(r => r.categoryId === rec.categoryId) || rec;
+          const seenCanonical = new Set();
+          const protectedRecords = incomingArr
+            .filter(rec => rec && typeof rec === 'object')
+            .map(rec => {
+              const canonicalId = normalizeGoalCategoryId(rec.categoryId) || rec.categoryId;
+              seenCanonical.add(canonicalId);
+              if (earnedToday[canonicalId] || earnedToday[rec.categoryId]) {
+                return existingToday.find(r =>
+                  r && (normalizeGoalCategoryId(r.categoryId) || r.categoryId) === canonicalId
+                ) || rec;
+              }
+              return rec;
+            });
+          // Сохраняем ранее зачтённые сегодня цели, даже если клиент прислал неполный список
+          for (const existingRec of existingToday) {
+            if (!existingRec || typeof existingRec !== 'object') continue;
+            const canonicalId = normalizeGoalCategoryId(existingRec.categoryId) || existingRec.categoryId;
+            if ((earnedToday[canonicalId] || earnedToday[existingRec.categoryId]) && !seenCanonical.has(canonicalId)) {
+              protectedRecords.push(existingRec);
+              seenCanonical.add(canonicalId);
             }
-            return rec;
-          });
+          }
           merged[todayDateStr] = protectedRecords;
         }
       }
@@ -462,23 +534,25 @@ async function _updateUserProgressLocked(userId, progressData) {
       const incoming = progressData.goalStreaks || {};
       const mergedStreaks = { ...oldStreaks };
 
-      for (const catId in incoming) {
-        const inc = incoming[catId];
-        const old = oldStreaks[catId];
+      for (const rawCatId in incoming) {
+        const canonicalCatId = normalizeGoalCategoryId(rawCatId) || rawCatId;
+        const inc = incoming[rawCatId];
+        const legacyKey = Object.keys(LEGACY_GOAL_CATEGORY_MAP).find(k => LEGACY_GOAL_CATEGORY_MAP[k] === canonicalCatId);
+        const old = oldStreaks[canonicalCatId] ?? oldStreaks[rawCatId] ?? (legacyKey ? oldStreaks[legacyKey] : undefined);
 
         // Поддержка обоих форматов: число (legacy) и объект (v2)
-        const incCurrent  = (typeof inc === 'object' && inc !== null) ? (parseInt(inc.current)  || 0) : (parseInt(inc) || 0);
-        const incLongest  = (typeof inc === 'object' && inc !== null) ? (parseInt(inc.longest)  || 0) : incCurrent;
+        const incCurrent  = (typeof inc === 'object' && inc !== null) ? (parseInt(inc.current, 10)  || 0) : (parseInt(inc, 10) || 0);
+        const incLongest  = (typeof inc === 'object' && inc !== null) ? (parseInt(inc.longest, 10)  || 0) : incCurrent;
         const incLastDate = (typeof inc === 'object' && inc !== null) ? (inc.lastCompletedDate  || '') : '';
 
-        const oldCurrent  = (typeof old === 'object' && old !== null) ? (parseInt(old.current)  || 0) : (parseInt(old) || 0);
-        const oldLongest  = (typeof old === 'object' && old !== null) ? (parseInt(old.longest)  || 0) : oldCurrent;
+        const oldCurrent  = (typeof old === 'object' && old !== null) ? (parseInt(old.current, 10)  || 0) : (parseInt(old, 10) || 0);
+        const oldLongest  = (typeof old === 'object' && old !== null) ? (parseInt(old.longest, 10)  || 0) : oldCurrent;
 
         // Блокируем прыжок current больше чем +1 за раз (защита от накруток)
-        const safeCurrent = incCurrent <= oldCurrent + 1 ? incCurrent : oldCurrent;
-        const safeLongest = Math.max(oldLongest, safeCurrent, incLongest);
+        const safeCurrent = incCurrent <= oldCurrent + 1 ? Math.max(0, incCurrent) : oldCurrent;
+        const safeLongest = Math.max(oldLongest, safeCurrent, Math.max(0, incLongest));
 
-        mergedStreaks[catId] = {
+        mergedStreaks[canonicalCatId] = {
           current: safeCurrent,
           longest: safeLongest,
           lastCompletedDate: incLastDate || ((typeof old === 'object' && old !== null) ? old.lastCompletedDate : '') || '',
@@ -493,25 +567,21 @@ async function _updateUserProgressLocked(userId, progressData) {
       const incoming   = progressData.tasbeehRecords || {};
       const earnedTasbeehXp = { ...(oldUser.earnedTasbeehXp || {}) };
 
-      const TASBEEH_XP = {
-        subhanallah: 33, alhamdulillah: 33, allahuakbar: 33,
-        astaghfirullah: 100, lailaha: 100, salavat: 100,
-      };
-
       const merged = { ...oldTasbeeh };
       for (const dateKey in incoming) {
         const dayRecord = incoming[dateKey];
-        if (!dayRecord) continue;
+        if (!dayRecord || typeof dayRecord !== 'object') continue;
 
         merged[dateKey] = dayRecord;
 
         if (dateKey === todayDateStr) {
           const todayEarnedDhikrs = [...(earnedTasbeehXp[todayDateStr] || [])];
-          const completedIds = dayRecord.completedIds || [];
+          const completedIds = Array.isArray(dayRecord.completedIds) ? dayRecord.completedIds : [];
 
           for (const dhikrId of completedIds) {
+            if (!Object.prototype.hasOwnProperty.call(TASBEEH_XP, dhikrId)) continue;
             if (!todayEarnedDhikrs.includes(dhikrId)) {
-              const dhikrXp = TASBEEH_XP[dhikrId] || 30;
+              const dhikrXp = TASBEEH_XP[dhikrId];
               xpToAdd += dhikrXp;
               todayEarnedDhikrs.push(dhikrId);
               console.log(`📿 +${dhikrXp} XP за зікір ${dhikrId}`);
@@ -538,8 +608,16 @@ async function _updateUserProgressLocked(userId, progressData) {
       }
     }
 
-    // XP — считаем САМИ, не берём с фронта
-    updateFields.xp = (oldUser.xp || 0) + xpToAdd;
+    // ─── ОБНОВЛЕНИЕ СТРИКА (после всех источников XP: намаз, цели, Коран, имена, тасбих) ───
+    const lastActiveDate = oldUser.lastActiveDate || '';
+    const yesterdayStr = getTodayStr(userTimezone, new Date(now.getTime() - 86400000));
+    let newStreak = oldUser.currentStreak || 0;
+    const hasActivityToday = xpToAdd > 0;
+    if (hasActivityToday) {
+      if (lastActiveDate === yesterdayStr) newStreak += 1;
+      else if (lastActiveDate !== todayDateStr) newStreak = 1;
+    }
+    const longestStreak = Math.max(oldUser.longestStreak || 0, newStreak);
 
     // Глобальный стрик
     if (hasActivityToday) {
@@ -548,12 +626,19 @@ async function _updateUserProgressLocked(userId, progressData) {
       updateFields.lastActiveDate = todayDateStr;
     }
 
+    // XP начисляем атомарно через $inc, чтобы конкурентные $inc (рефералы/бонусы/Шавваль)
+    // не могли быть затёрты read-modify-write.
+    const incFields = { syncVersion: 1 };
+    if (xpToAdd > 0) {
+      incFields.xp = xpToAdd;
+    }
+
     const versionFilter = currentSyncVersion === 0
       ? { $or: [{ syncVersion: 0 }, { syncVersion: { $exists: false } }] }
       : { syncVersion: currentSyncVersion };
     const result = await usersCollection.updateOne(
       { userId: parseInt(userId), ...versionFilter },
-      { $set: updateFields, $inc: { syncVersion: 1 } }
+      { $set: updateFields, $inc: incFields }
     );
 
     // Защита на случай обновления документа другим процессом между read и write.
@@ -565,13 +650,13 @@ async function _updateUserProgressLocked(userId, progressData) {
     if (result.modifiedCount > 0 || xpToAdd > 0) {
       console.log(`✅ Прогресс обновлен для userId: ${userId}, начислено XP: ${xpToAdd}`);
       if (xpToAdd > 0) {
-        addContestXp(userId, xpToAdd).catch(err =>
+        addContestXpFn(userId, xpToAdd).catch(err =>
           console.error(`❌ addContestXp error for ${userId}:`, err)
         );
       }
       const currentStreak = hasActivityToday ? newStreak : (oldUser.currentStreak || 0);
-      const streakMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
-      return { success: true, xpAdded: xpToAdd, streakMultiplier: xpToAdd > 0 ? streakMultiplier : 1.0, currentStreak, syncVersion: currentSyncVersion + 1 };
+      const effectiveMultiplier = Math.min(1 + (currentStreak * 0.1), 3.0);
+      return { success: true, xpAdded: xpToAdd, streakMultiplier: xpToAdd > 0 ? effectiveMultiplier : 1.0, currentStreak, syncVersion: currentSyncVersion + 1 };
     }
     return { success: true, xpAdded: 0, streakMultiplier: 1.0, currentStreak: oldUser.currentStreak || 0, syncVersion: currentSyncVersion + 1 };
   } catch (error) {
@@ -773,22 +858,27 @@ async function getUserAccess(userId) {
   return { hasAccess: false, paymentStatus: 'unpaid', reason: 'not_paid' };
 }
 
-async function addUserXP(userId, amount, reason = '') {
-  try {
-    const result = await getDB().collection('users').updateOne(
-      { userId: parseInt(userId) },
-      { $inc: { xp: amount }, $set: { updatedAt: new Date() } }
-    );
-    if (result.modifiedCount > 0) {
-      await checkAndUnlockBadges(userId);
-      addContestXp(userId, amount).catch(err =>
-        console.error(`❌ addContestXp error for ${userId}:`, err)
+async function addUserXP(userId, amount, reason = '', deps = {}) {
+  return withUserLock(userId, async () => {
+    try {
+      const db = deps.db || getDB();
+      const addContestXpFn = deps.addContestXp || addContestXp;
+      const checkBadgesFn = deps.checkAndUnlockBadges || (deps.db ? async () => [] : checkAndUnlockBadges);
+      const result = await db.collection('users').updateOne(
+        { userId: parseInt(userId) },
+        { $inc: { xp: amount }, $set: { updatedAt: new Date() } }
       );
-      console.log(`✅ Добавлено ${amount} XP для userId ${userId}. Причина: ${reason}`);
-      return true;
-    }
-    return false;
-  } catch (error) { console.error('❌ addUserXP:', error); throw error; }
+      if (result.modifiedCount > 0) {
+        await checkBadgesFn(userId);
+        addContestXpFn(userId, amount).catch(err =>
+          console.error(`❌ addContestXp error for ${userId}:`, err)
+        );
+        console.log(`✅ Добавлено ${amount} XP для userId ${userId}. Причина: ${reason}`);
+        return true;
+      }
+      return false;
+    } catch (error) { console.error('❌ addUserXP:', error); throw error; }
+  });
 }
 
 async function getGlobalLeaderboard(limit = 50) {
@@ -834,8 +924,9 @@ async function checkAndUnlockBadges(userId) {
     const friendsLeaderboard = await getFriendsLeaderboard(userId, 20);
     if (friendsLeaderboard?.length > 0 && friendsLeaderboard[0].userId === userId && !newBadges.includes('friends_leader')) newBadges.push('friends_leader');
     if (user.xp >= 10000 && !newBadges.includes('legend')) newBadges.push('legend');
-    if (newBadges.length > unlockedBadges.length) {
-      await users.updateOne({ userId }, { $set: { unlockedBadges: newBadges } });
+    const newlyAdded = newBadges.filter(b => !unlockedBadges.includes(b));
+    if (newlyAdded.length > 0) {
+      await users.updateOne({ userId }, { $addToSet: { unlockedBadges: { $each: newlyAdded } } });
     }
     return newBadges;
   } catch (error) { console.error('Ошибка checkAndUnlockBadges:', error); return []; }
@@ -871,66 +962,68 @@ async function getFilteredLeaderboard(options = {}) {
 }
 
 async function addReferralXP(userId, type = 'registration', referredUserId = null, referredUserName = null) {
-  try {
-    const now = new Date();
-    if (now.getTime() > EID_AL_FITR_MS) return { success: false, reason: 'period_ended' };
-    const users = getDB().collection('users');
+  return withUserLock(userId, async () => {
+    try {
+      const now = new Date();
+      if (now.getTime() > EID_AL_FITR_MS) return { success: false, reason: 'period_ended' };
+      const users = getDB().collection('users');
 
-    // Читаем только timezone — один лёгкий запрос
-    const userTz = await users.findOne(
-      { userId: parseInt(userId) },
-      { projection: { 'location.timezone': 1 } }
-    );
-    if (!userTz) return { success: false, reason: 'user_not_found' };
-    const todayDateStr = getTodayStr(userTz.location?.timezone || 'Asia/Almaty');
-
-    let finalXP = 0, multiplier = 1.0, todayCount = 0;
-
-    if (type === 'payment') {
-      finalXP = 400;
-      // Атомарно добавляем XP — без read-then-write
-      await users.updateOne(
+      // Читаем только timezone — один лёгкий запрос
+      const userTz = await users.findOne(
         { userId: parseInt(userId) },
-        { $inc: { xp: finalXP }, $set: { updatedAt: new Date() } }
+        { projection: { 'location.timezone': 1 } }
       );
-      addContestXp(userId, finalXP).catch(err =>
-        console.error(`❌ addContestXp referral-payment error for ${userId}:`, err)
-      );
-    } else {
-      // Атомарно инкрементируем счётчик рефералов и invitedCount,
-      // получаем новое значение после инкремента (returnDocument: 'after')
-      const updated = await users.findOneAndUpdate(
-        { userId: parseInt(userId) },
-        {
-          $inc: {
-            [`dailyReferrals.${todayDateStr}`]: 1,
-            invitedCount: 1,
+      if (!userTz) return { success: false, reason: 'user_not_found' };
+      const todayDateStr = getTodayStr(userTz.location?.timezone || 'Asia/Almaty');
+
+      let finalXP = 0, multiplier = 1.0, todayCount = 0;
+
+      if (type === 'payment') {
+        finalXP = 400;
+        // Атомарно добавляем XP — без read-then-write
+        await users.updateOne(
+          { userId: parseInt(userId) },
+          { $inc: { xp: finalXP }, $set: { updatedAt: new Date() } }
+        );
+        addContestXp(userId, finalXP).catch(err =>
+          console.error(`❌ addContestXp referral-payment error for ${userId}:`, err)
+        );
+      } else {
+        // Атомарно инкрементируем счётчик рефералов и invitedCount,
+        // получаем новое значение после инкремента (returnDocument: 'after')
+        const updated = await users.findOneAndUpdate(
+          { userId: parseInt(userId) },
+          {
+            $inc: {
+              [`dailyReferrals.${todayDateStr}`]: 1,
+              invitedCount: 1,
+            },
+            $set: { updatedAt: new Date() },
           },
-          $set: { updatedAt: new Date() },
-        },
-        { returnDocument: 'after', projection: { dailyReferrals: 1 } }
-      );
-      if (!updated) return { success: false, reason: 'user_not_found' };
+          { returnDocument: 'after', projection: { dailyReferrals: 1 } }
+        );
+        if (!updated) return { success: false, reason: 'user_not_found' };
 
-      // Рассчитываем мультипликатор по актуальному (уже записанному) счётчику
-      todayCount = updated.dailyReferrals?.[todayDateStr] || 1;
-      if (todayCount >= 50) multiplier = 2.0;
-      else if (todayCount >= 20) multiplier = 1.6;
-      else if (todayCount >= 5) multiplier = 1.3;
-      finalXP = Math.floor(100 * multiplier);
+        // Рассчитываем мультипликатор по актуальному (уже записанному) счётчику
+        todayCount = updated.dailyReferrals?.[todayDateStr] || 1;
+        if (todayCount >= 50) multiplier = 2.0;
+        else if (todayCount >= 20) multiplier = 1.6;
+        else if (todayCount >= 5) multiplier = 1.3;
+        finalXP = Math.floor(100 * multiplier);
 
-      // Атомарно добавляем XP
-      await users.updateOne(
-        { userId: parseInt(userId) },
-        { $inc: { xp: finalXP } }
-      );
-      addContestXp(userId, finalXP).catch(err =>
-        console.error(`❌ addContestXp referral-reg error for ${userId}:`, err)
-      );
-    }
+        // Атомарно добавляем XP
+        await users.updateOne(
+          { userId: parseInt(userId) },
+          { $inc: { xp: finalXP } }
+        );
+        addContestXp(userId, finalXP).catch(err =>
+          console.error(`❌ addContestXp referral-reg error for ${userId}:`, err)
+        );
+      }
 
-    return { success: true, xp: finalXP, multiplier: type === 'payment' ? 1.0 : multiplier, todayCount: type === 'registration' ? todayCount : 0, referredUserName, type };
-  } catch (error) { console.error('❌ addReferralXP:', error); return { success: false, reason: 'error' }; }
+      return { success: true, xp: finalXP, multiplier: type === 'payment' ? 1.0 : multiplier, todayCount: type === 'registration' ? todayCount : 0, referredUserName, type };
+    } catch (error) { console.error('❌ addReferralXP:', error); return { success: false, reason: 'error' }; }
+  });
 }
 
 /**
@@ -959,6 +1052,8 @@ async function claimPaymentBonus(userId) {
 }
 
 export {
+  XP_VALUES, GOAL_CATEGORY_MAX_XP, LEGACY_GOAL_CATEGORY_MAP, TASBEEH_XP,
+  normalizeGoalCategoryId,
   getOrCreateUser, getUserById, getUserByPromoCode, incrementReferralCount,
   updateUserProgress, getUserFullData, updateUserOnboarding, checkPromoCode,
   updatePaymentStatus, approvePayment, rejectPayment, getUserAccess,
