@@ -8,6 +8,7 @@ import { connectDB, getDB, createIndexes } from './db.js';
 import {
   RAMADAN_START_DATE, EID_AL_FITR_DATE,
   SHAWWAL_START_DATE, SHAWWAL_END_DATE, SHAWWAL_FASTS,
+  getBotUsername,
 } from './config.js';
 import {
   getPrayerTimesByCity,
@@ -23,6 +24,7 @@ import {
   incrementReferralCount,
   updateUserOnboarding,
   checkPromoCode,
+  redeemReferralCode,
   updatePaymentStatus,
   approvePayment,
   rejectPayment,
@@ -976,7 +978,7 @@ bot.on('callback_query', async (query) => {
       // даже если админ нажмёт «Подтвердить» дважды.
       if (inviterPromoCode && await claimPaymentBonus(targetUserId)) {
         const inviter = await getUserByPromoCode(inviterPromoCode);
-        if (inviter) {
+        if (inviter && Number(inviter.userId) !== Number(targetUserId)) {
           const referralResult = await addReferralXP(inviter.userId, 'payment', targetUserId, user.name || user.username || `${targetUserId}`);
           console.log(`💰 +${referralResult.xp} XP владельцу промокода ${inviterPromoCode} за оплату userId ${targetUserId}`);
 
@@ -1240,7 +1242,7 @@ async function showPayment(chatId, userId, price, hasDiscount) {
     const promoSource = user.referredBy || user.usedPromoCode;
     if (promoSource && await claimReferralBonus(userId)) {
       const inviter = await getUserByPromoCode(promoSource);
-      if (inviter) {
+      if (inviter && Number(inviter.userId) !== Number(userId)) {
         const isReferralLink = !!user.referredBy;
         const referralResult = await addReferralXP(inviter.userId, 'registration', userId, user.name || user.username);
         await addUserXP(userId, 100, isReferralLink ? 'Регистрация по реферальной ссылке' : 'Использование промокода');
@@ -1625,7 +1627,7 @@ bot.on('message', async (msg) => {
         return;
       }
       
-      const botUsername = 'imantap_bot';
+      const botUsername = getBotUsername();
       const referralLink = `https://t.me/${botUsername}?start=ref_${user.promoCode}`;
       
       // Экранируем подчёркивания для Markdown
@@ -1897,11 +1899,11 @@ bot.on('message', async (msg) => {
 
     // ✅ ПРОВЕРКА: уже использовал промокод?
     const user = await getUserById(userId);
-    if (user.usedPromoCode || user.referredBy) {
+    if (user.hasRedeemedReferral || user.usedPromoCode || user.referredBy) {
       await bot.sendMessage(
         chatId,
         `❌ *Промокод қолдану мүмкін емес*\n\n` +
-        `Сіз бұрын промокод қолдандыңыз: *${user.usedPromoCode || user.referredBy}*\n\n` +
+        `Сіз бұрын промокод қолдандыңыз: *${user.usedPromoCode || user.referredBy || '—'}*\n\n` +
         `Бір қолданушы тек бір промокод қолдана алады.`,
         {
           parse_mode: 'Markdown',
@@ -1915,14 +1917,12 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    const check = await checkPromoCode(promoCode, userId);
+    const redeem = await redeemReferralCode(userId, promoCode, {
+      source: 'promo',
+      requirePaidOwner: true,
+    });
     
-    if (check.valid) {
-      await updateUserOnboarding(userId, {
-        usedPromoCode: promoCode,
-        hasDiscount: true
-      });
-      
+    if (redeem.success) {
       await bot.sendMessage(
         chatId,
         `✅ Промокод қабылданды!
@@ -1936,12 +1936,14 @@ bot.on('message', async (msg) => {
     } else {
       // Ошибка промокода
       let errorMsg = '❌ Промокод қате.';
-      if (check.reason === 'not_found') {
+      if (redeem.reason === 'not_found') {
         errorMsg = '❌ Промокод табылмады.';
-      } else if (check.reason === 'own_code') {
+      } else if (redeem.reason === 'own_code') {
         errorMsg = '❌ Өз промокодыңызды қолдануға болмайды.';
-      } else if (check.reason === 'owner_not_paid') {
+      } else if (redeem.reason === 'owner_not_paid') {
         errorMsg = '❌ Промокод иесі төлем жасамаған.';
+      } else if (redeem.reason === 'already_redeemed') {
+        errorMsg = '❌ Сіз бұрын промокод қолдандыңыз.';
       }
       errorMsg += '\n\nҚайталап көріңіз немесе артқа қайтыңыз.';
       
@@ -1962,11 +1964,11 @@ bot.on('message', async (msg) => {
 
     // ✅ ПРОВЕРКА: уже использовал промокод?
     const user = await getUserById(userId);
-    if (user.usedPromoCode || user.referredBy) {
+    if (user.hasRedeemedReferral || user.usedPromoCode || user.referredBy) {
       await bot.sendMessage(
         chatId,
         `❌ *Промокод қолдану мүмкін емес*\n\n` +
-        `Сіз бұрын промокод қолдандыңыз: *${user.usedPromoCode || user.referredBy}*\n\n` +
+        `Сіз бұрын промокод қолдандыңыз: *${user.usedPromoCode || user.referredBy || '—'}*\n\n` +
         `Бір қолданушы тек бір промокод қолдана алады.`,
         {
           parse_mode: 'Markdown',
@@ -1980,14 +1982,12 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    const check = await checkPromoCode(promoCode, userId);
+    const redeem = await redeemReferralCode(userId, promoCode, {
+      source: 'promo',
+      requirePaidOwner: true,
+    });
     
-    if (check.valid) {
-      await updateUserOnboarding(userId, {
-        usedPromoCode: promoCode,
-        hasDiscount: true
-      });
-      
+    if (redeem.success) {
       await bot.sendMessage(
         chatId,
         `✅ Промокод қабылданды!
@@ -2000,12 +2000,14 @@ bot.on('message', async (msg) => {
       await showPayment(chatId, userId, 1990, true);
     } else {
       let errorMsg = '❌ Промокод қате.';
-      if (check.reason === 'not_found') {
+      if (redeem.reason === 'not_found') {
         errorMsg = '❌ Промокод табылмады.';
-      } else if (check.reason === 'own_code') {
+      } else if (redeem.reason === 'own_code') {
         errorMsg = '❌ Өз промокодыңызды қолдануға болмайды.';
-      } else if (check.reason === 'owner_not_paid') {
+      } else if (redeem.reason === 'owner_not_paid') {
         errorMsg = '❌ Промокод иесі төлем жасамаған.';
+      } else if (redeem.reason === 'already_redeemed') {
+        errorMsg = '❌ Сіз бұрын промокод қолдандыңыз.';
       }
       errorMsg += '\n\nҚайталап көріңіз немесе артқа қайтыңыз.';
       
@@ -2054,11 +2056,11 @@ bot.on('message', async (msg) => {
     const user = await getUserById(userId);
 
     // ✅ ПРОВЕРКА: уже использовал промокод?
-    if (user.usedPromoCode || user.referredBy) {
+    if (user.hasRedeemedReferral || user.usedPromoCode || user.referredBy) {
       await bot.sendMessage(
         chatId,
         `❌ *Промокод қолдану мүмкін емес*\n\n` +
-        `Сіз бұрын промокод қолдандыңыз: *${user.usedPromoCode || user.referredBy}*\n\n` +
+        `Сіз бұрын промокод қолдандыңыз: *${user.usedPromoCode || user.referredBy || '—'}*\n\n` +
         `Бір қолданушы тек бір промокод қолдана алады.`,
         {
           parse_mode: 'Markdown',
@@ -2088,23 +2090,17 @@ bot.on('message', async (msg) => {
       return;
     }
     
-    // Проверяем промокод
-    const check = await checkPromoCode(promoCode, userId);
+    // Атомарно проверяем и применяем промокод (с защитой от повторного ввода)
+    const newPrice = 1990;
+    const redeem = await redeemReferralCode(userId, promoCode, {
+      source: 'promo',
+      requirePaidOwner: true,
+      paidAmount: newPrice,
+    });
+    const check = { valid: redeem.success, reason: redeem.reason, owner: redeem.owner };
     
     if (check.valid) {
-      const newPrice = 1990;
-      
-      // ✅ ПРИМЕНЯЕМ ПРОМОКОД
-      await updateUserOnboarding(userId, {
-        usedPromoCode: promoCode,
-        hasDiscount: true,
-        paidAmount: newPrice
-      });
-      
-      // Начисляем XP обоим
-      await addUserXP(userId, 100, 'Использован промокод');
-      await addUserXP(check.owner.userId, 100, `Промокод использован пользователем ${userId}`);
-      
+      // Начисление реферального XP выполняется атомарно и однократно внутри showPayment (через claimReferralBonus + addReferralXP)
       await bot.sendMessage(
         chatId,
         `✅ Промокод қабылданды!
@@ -2120,7 +2116,7 @@ bot.on('message', async (msg) => {
       );
 
       
-      // Показываем оплату со скидкой
+      // Показываем оплату со скидкой (здесь же атомарно начисляется реферальный бонус)
       await showPayment(chatId, userId, newPrice, true);
       
       // Уведомляем владельца промокода
@@ -2208,6 +2204,17 @@ bot.on('message', async (msg) => {
       if (!parsed) {
         return bot.sendMessage(chatId,
           '❌ Неверный формат. Пример: 11.04.2026 23:59'
+        );
+      }
+      const start = getSessionData(userId, 'contestStart');
+      if (start && parsed <= start) {
+        return bot.sendMessage(chatId,
+          '❌ Дата окончания должна быть позже даты начала. Введите снова:'
+        );
+      }
+      if (parsed <= new Date()) {
+        return bot.sendMessage(chatId,
+          '❌ Дата окончания должна быть в будущем. Введите снова:'
         );
       }
       setSessionData(userId, 'contestEnd', parsed);
@@ -2778,10 +2785,15 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
     // 🔥 ПРОВЕРКА 2: Обработка реферальной ссылки
     let referralCode = null;
     if (param && param.startsWith('ref_')) {
-      referralCode = param.substring(4);
+      referralCode = param.substring(4).trim().toUpperCase();
       
-      // Проверяем что это не свой промокод
-      if (referralCode.toUpperCase() === user.promoCode) {
+      // Атомарно проверяем и сохраняем реферала (защита от самореферала и повторного ввода)
+      const redeem = await redeemReferralCode(userId, referralCode, {
+        source: 'link',
+        requirePaidOwner: false,
+      });
+
+      if (redeem.reason === 'own_code') {
         bot.sendMessage(
           chatId,
           "⚠️ Өз промокодыңызды пайдалануға болмайды!"
@@ -2789,30 +2801,19 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
         return;
       }
 
-      // Проверяем существует ли такой промокод
-      const inviter = await getUserByPromoCode(referralCode);
-
-      if (inviter) {
-        // ✅ ВАЖНО: Сохраняем реферал ТОЛЬКО если ЕЩЁ НЕ СОХРАНЁН
-        if (!user.referredBy && !user.usedPromoCode) {
-          await updateUserOnboarding(userId, {
-            referredBy: referralCode,
-            hasDiscount: true
-          });
-          
-          console.log(`🎯 Реферал сохранён: userId ${userId} → промокод ${referralCode}`);
-          
-          bot.sendMessage(
-            chatId,
-            `🎁 *Сізде реферал сілтемесі бар!*\n\n` +
-            `Досыңыз сізді шақырды.\n` +
-            `Сіз -500₸ жеңілдік аласыз!\n\n` +
-            `Баптауды бастайық! 🚀`,
-            { parse_mode: 'Markdown' }
-          );
-        } else {
-          console.log(`ℹ️ Пользователь ${userId} уже имеет промокод/реферал. Игнорируем новую ссылку.`);
-        }
+      if (redeem.success) {
+        console.log(`🎯 Реферал сохранён: userId ${userId} → промокод ${referralCode}`);
+        
+        bot.sendMessage(
+          chatId,
+          `🎁 *Сізде реферал сілтемесі бар!*\n\n` +
+          `Досыңыз сізді шақырды.\n` +
+          `Сіз -500₸ жеңілдік аласыз!\n\n` +
+          `Баптауды бастайық! 🚀`,
+          { parse_mode: 'Markdown' }
+        );
+      } else if (redeem.reason === 'already_redeemed') {
+        console.log(`ℹ️ Пользователь ${userId} уже имеет промокод/реферал. Игнорируем новую ссылку.`);
       }
     }
 
@@ -2902,7 +2903,7 @@ bot.onText(/\/mycode/, async (msg) => {
       return;
     }
 
-    const botUsername = 'imantap_bot';
+    const botUsername = getBotUsername();
     const referralLink = `https://t.me/${botUsername}?start=ref_${user.promoCode}`;
     
     const message = 
@@ -3507,10 +3508,12 @@ bot.onText(/\/admin_referrals/, async (msg) => {
       message += `   Промокод: \`${user.promoCode}\`\n\n`;
     });
 
+    const totalUsersCount = await users.countDocuments({});
+    const viralCoeff = totalUsersCount > 0 ? (totalReferrals / totalUsersCount).toFixed(2) : '0.00';
     message += `📊 *Общая статистика:*\n`;
     message += `• Всего по рефералам: ${totalReferrals}\n`;
     message += `• Оплатили: ${paidReferrals} (${totalReferrals > 0 ? ((paidReferrals/totalReferrals)*100).toFixed(1) : 0}%)\n`;
-    message += `• Средний виральный коэф: ${(totalReferrals / (await users.countDocuments({}))).toFixed(2)}`;
+    message += `• Средний виральный коэф: ${viralCoeff}`;
 
     bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
   } catch (error) {

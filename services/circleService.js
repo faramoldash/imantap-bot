@@ -19,52 +19,56 @@ function generateInviteCode() {
   return code;
 }
 
+function toValidUserId(id) {
+  const parsed = parseInt(id, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error('Invalid userId');
+  }
+  return parsed;
+}
+
 /**
  * Создать новый круг
  */
-async function createCircle(ownerId, name, description = '') {
+async function createCircle(ownerId, name, description = '', deps = {}) {
   try {
-    const trimmedName = name?.trim();
+    const ownerUid = toValidUserId(ownerId);
+    const trimmedName = typeof name === 'string' ? name.trim() : '';
     if (!trimmedName || trimmedName.length > 50) {
       throw new Error('Circle name must be 1–50 characters');
     }
-    const trimmedDesc = (description || '').trim();
+    const trimmedDesc = typeof description === 'string' ? description.trim() : '';
     if (trimmedDesc.length > 200) {
       throw new Error('Description must be 200 characters or fewer');
     }
 
-    const db = getDB();
+    const db = deps.db || getDB();
     const circles = db.collection('circles');
     const users = db.collection('users');
 
     // Получаем данные создателя
-    const owner = await users.findOne({ userId: parseInt(ownerId) });
+    const owner = await users.findOne({ userId: ownerUid });
     
     if (!owner) {
       throw new Error('User not found');
     }
     
-    // ✅ ОГРАНИЧЕНИЕ СНЯТО - пользователь может создавать несколько кругов
-    // const existingCircle = await circles.findOne({
-    //   ownerId: parseInt(ownerId),
-    //   'members.status': 'active'
-    // });
-
-    // if (existingCircle) {
-    //   throw new Error('You already have an active circle');
-    // }
-    
     const circleId = generateCircleId();
-    const inviteCode = generateInviteCode();
+    let inviteCode = generateInviteCode();
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const existing = await circles.findOne({ inviteCode });
+      if (!existing) break;
+      inviteCode = generateInviteCode();
+    }
     const now = new Date().toISOString();
     
     const circle = {
       circleId,
       name: trimmedName,
       description: trimmedDesc,
-      ownerId: parseInt(ownerId),
+      ownerId: ownerUid,
       members: [{
-        userId: parseInt(ownerId),
+        userId: ownerUid,
         username: owner.username || '',
         name: owner.name || 'User',
         photoUrl: owner.photoUrl || '',
@@ -84,7 +88,7 @@ async function createCircle(ownerId, name, description = '') {
     
     const result = await circles.insertOne(circle);
     
-    console.log(`✅ Круг создан: ${name} (ID: ${circleId})`);
+    console.log(`✅ Круг создан: ${trimmedName} (ID: ${circleId})`);
     
     return {
       success: true,
@@ -99,25 +103,24 @@ async function createCircle(ownerId, name, description = '') {
 /**
  * Получить круги пользователя
  */
-async function getUserCircles(userId) {
+async function getUserCircles(userId, deps = {}) {
   try {
-    const db = await getDB();
+    const uid = toValidUserId(userId);
+    const db = deps.db || getDB();
     const circles = db.collection('circles');
     
     // Получаем все круги где пользователь есть в members
     const allCircles = await circles.find({
-      'members.userId': parseInt(userId)
+      'members.userId': uid
     }).toArray();
     
-    // Фильтруем только активные и pending (исключаем left и declined)
+    // Фильтруем только активные и pending (исключаем left, declined и removed)
     const activeCircles = allCircles.filter(circle => {
-      const member = circle.members.find(m => 
-        m.userId === parseInt(userId) || m.userId === userId
-      );
+      const member = circle.members.find(m => Number(m.userId) === uid);
       return member && (member.status === 'active' || member.status === 'pending');
     });
     
-    console.log(`✅ Найдено кругов для userId ${userId}: ${activeCircles.length}`);
+    console.log(`✅ Найдено кругов для userId ${uid}: ${activeCircles.length}`);
     
     return activeCircles;
   } catch (error) {
@@ -129,9 +132,10 @@ async function getUserCircles(userId) {
 /**
  * Получить детали круга с real-time прогрессом
  */
-async function getCircleDetails(circleId, requesterId) {
+async function getCircleDetails(circleId, requesterId, deps = {}) {
   try {
-    const db = getDB();
+    const reqUid = toValidUserId(requesterId);
+    const db = deps.db || getDB();
     const circles = db.collection('circles');
     const users = db.collection('users');
     
@@ -141,34 +145,9 @@ async function getCircleDetails(circleId, requesterId) {
       throw new Error('Circle not found');
     }
     
-    // Проверяем что запрашивающий - участник
-    console.log('🔍 Проверка доступа к кругу:', {
-      circleId,
-      requesterId,
-      requesterIdType: typeof requesterId,
-      members: circle.members.map(m => ({ 
-        userId: m.userId, 
-        userIdType: typeof m.userId,
-        status: m.status 
-      }))
-    });
-
     const isMember = circle.members.some(
-      m => {
-        // Разрешаем доступ для active и pending (чтобы видеть детали перед принятием)
-        const match = (m.userId === parseInt(requesterId) || m.userId === requesterId) && 
-                      (m.status === 'active' || m.status === 'pending');
-        console.log('🔍 Сравнение:', {
-          memberUserId: m.userId,
-          requesterId,
-          status: m.status,
-          match
-        });
-        return match;
-      }
+      m => Number(m.userId) === reqUid && (m.status === 'active' || m.status === 'pending')
     );
-
-    console.log('🔍 isMember:', isMember);
 
     if (!isMember) {
       throw new Error('Access denied');
@@ -268,6 +247,9 @@ async function getCircleDetails(circleId, requesterId) {
             role: member.role,
             xp: user.xp || 0,
             currentStreak: user.currentStreak || 0,
+            customTasks: Array.isArray(user.customTasks)
+              ? user.customTasks.map(t => ({ id: t.id, text: t.text, completed: !!t.completed }))
+              : [],
             todayProgress: {
               percent: progressPercent,
               completed: completed,
@@ -291,9 +273,18 @@ async function getCircleDetails(circleId, requesterId) {
 /**
  * Отправить приглашение в круг (по username)
  */
-async function inviteToCircle(circleId, inviterId, targetUsername) {
+async function inviteToCircle(circleId, inviterId, targetUsername, deps = {}) {
   try {
-    const db = getDB();
+    const inviterUid = toValidUserId(inviterId);
+    if (typeof targetUsername !== 'string' || !targetUsername.trim()) {
+      throw new Error('Username is required');
+    }
+    const rawClean = targetUsername.trim().replace(/^@+/, '');
+    if (!rawClean) {
+      throw new Error('Username is required');
+    }
+
+    const db = deps.db || getDB();
     const circles = db.collection('circles');
     const users = db.collection('users');
     
@@ -304,19 +295,18 @@ async function inviteToCircle(circleId, inviterId, targetUsername) {
     }
     
     // Проверяем что приглашающий - владелец
-    if (circle.ownerId !== parseInt(inviterId)) {
+    if (Number(circle.ownerId) !== inviterUid) {
       throw new Error('Only owner can invite');
     }
     
     // Проверяем лимит участников
-    if (circle.members.filter(m => m.status === 'active').length >= circle.settings.maxMembers) {
+    const maxMembers = circle.settings?.maxMembers || 10;
+    if (circle.members.filter(m => m.status === 'active').length >= maxMembers) {
       throw new Error('Circle is full');
     }
     
     // Ищем пользователя по username — один запрос с case-insensitive regex (с @ и без)
-    const cleanUsername = targetUsername.replace('@', '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    console.log('🔍 Ищем пользователя:', { original: targetUsername, cleaned: cleanUsername });
-
+    const cleanUsername = rawClean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const targetUser = await users.findOne({
       username: { $regex: new RegExp(`^@?${cleanUsername}$`, 'i') }
     });
@@ -325,51 +315,75 @@ async function inviteToCircle(circleId, inviterId, targetUsername) {
       throw new Error('User not found');
     }
 
-    console.log('✅ Пользователь найден:', {
-      userId: targetUser.userId,
-      username: targetUser.username
-    });
+    const targetUid = Number(targetUser.userId);
+    if (targetUid === inviterUid) {
+      throw new Error('Cannot invite yourself');
+    }
     
-    // Проверяем не состоит ли уже
-    const alreadyMember = circle.members.some(
-      m => m.userId === targetUser.userId && m.status !== 'removed'
-    );
-    
-    if (alreadyMember) {
+    // Проверяем существующую запись участника — не допускаем дубликатов в массиве members
+    const existingMember = circle.members.find(m => Number(m.userId) === targetUid);
+    if (existingMember && (existingMember.status === 'active' || existingMember.status === 'pending')) {
       throw new Error('User is already a member or has pending invite');
     }
     
-    // Добавляем со статусом pending
     const now = new Date().toISOString();
     
-    await circles.updateOne(
-      { circleId },
-      {
-        $push: {
-          members: {
-            userId: targetUser.userId,
-            username: targetUser.username || '',
-            name: targetUser.name || 'User',
-            photoUrl: targetUser.photoUrl || '',
-            role: 'member',
-            joinedAt: now,
-            status: 'pending'
-          }
+    if (existingMember) {
+      // Повторное приглашение ранее вышедшего/отклонившего/исключённого пользователя:
+      // обновляем запись на месте через $elemMatch без дублирования в members.
+      const reactivateRes = await circles.updateOne(
+        {
+          circleId,
+          members: { $elemMatch: { userId: targetUid, status: { $in: ['left', 'declined', 'removed'] } } }
         },
-        $set: { updatedAt: now }
+        {
+          $set: {
+            'members.$.username': targetUser.username || '',
+            'members.$.name': targetUser.name || 'User',
+            'members.$.photoUrl': targetUser.photoUrl || '',
+            'members.$.role': 'member',
+            'members.$.joinedAt': now,
+            'members.$.status': 'pending',
+            updatedAt: now
+          }
+        }
+      );
+      if (reactivateRes.modifiedCount === 0) {
+        throw new Error('User is already a member or has pending invite');
       }
-    );
+    } else {
+      // Атомарно добавляем нового участника только если его ещё нет в members
+      const pushRes = await circles.updateOne(
+        { circleId, 'members.userId': { $ne: targetUid } },
+        {
+          $push: {
+            members: {
+              userId: targetUid,
+              username: targetUser.username || '',
+              name: targetUser.name || 'User',
+              photoUrl: targetUser.photoUrl || '',
+              role: 'member',
+              joinedAt: now,
+              status: 'pending'
+            }
+          },
+          $set: { updatedAt: now }
+        }
+      );
+      if (pushRes.modifiedCount === 0) {
+        throw new Error('User is already a member or has pending invite');
+      }
+    }
     
     console.log(`✅ Приглашение отправлено: ${targetUsername} → ${circle.name}`);
     
-    // ✅ ИЗМЕНИТЬ: Возвращаем данные для отправки уведомления
     return { 
       success: true,
-      targetUserId: targetUser.userId,
+      targetUserId: targetUid,
       circleName: circle.name,
       circleDescription: circle.description,
       memberCount: circle.members.filter(m => m.status === 'active').length,
-      inviterUsername: circle.members.find(m => m.userId === parseInt(inviterId))?.username || 'Someone'
+      inviterUsername: circle.members.find(m => Number(m.userId) === inviterUid)?.username || 'Someone'
     };
   } catch (error) {
     console.error('❌ Ошибка приглашения:', error);
@@ -381,20 +395,32 @@ async function inviteToCircle(circleId, inviterId, targetUsername) {
 /**
  * Принять приглашение
  */
-async function acceptInvite(circleId, userId) {
+async function acceptInvite(circleId, userId, deps = {}) {
   try {
-    const db = getDB();
+    const uid = toValidUserId(userId);
+    const db = deps.db || getDB();
     const circles = db.collection('circles');
+
+    const circle = await circles.findOne({ circleId });
+    if (!circle) {
+      throw new Error('Invite not found');
+    }
+    const maxMembers = circle.settings?.maxMembers || 10;
+    const activeCount = circle.members.filter(m => m.status === 'active').length;
+    if (activeCount >= maxMembers) {
+      throw new Error('Circle is full');
+    }
     
+    // $elemMatch гарантирует совпадение userId и status === 'pending' в одном элементе массива
     const result = await circles.updateOne(
-      { 
+      {
         circleId,
-        'members.userId': parseInt(userId),
-        'members.status': 'pending'
+        members: { $elemMatch: { userId: uid, status: 'pending' } }
       },
       {
         $set: {
           'members.$.status': 'active',
+          'members.$.joinedAt': new Date().toISOString(),
           updatedAt: new Date().toISOString()
         }
       }
@@ -404,7 +430,7 @@ async function acceptInvite(circleId, userId) {
       throw new Error('Invite not found');
     }
     
-    console.log(`✅ Приглашение принято: userId=${userId}, circleId=${circleId}`);
+    console.log(`✅ Приглашение принято: userId=${uid}, circleId=${circleId}`);
     
     return { success: true };
   } catch (error) {
@@ -416,16 +442,17 @@ async function acceptInvite(circleId, userId) {
 /**
  * Отклонить приглашение
  */
-async function declineInvite(circleId, userId) {
+async function declineInvite(circleId, userId, deps = {}) {
   try {
-    const db = getDB();
+    const uid = toValidUserId(userId);
+    const db = deps.db || getDB();
     const circles = db.collection('circles');
     
+    // $elemMatch гарантирует совпадение userId и status === 'pending' в одном элементе массива
     const result = await circles.updateOne(
-      { 
+      {
         circleId,
-        'members.userId': parseInt(userId),
-        'members.status': 'pending'
+        members: { $elemMatch: { userId: uid, status: 'pending' } }
       },
       {
         $set: {
@@ -439,7 +466,7 @@ async function declineInvite(circleId, userId) {
       throw new Error('Invite not found');
     }
     
-    console.log(`❌ Пользователь ${userId} отклонил приглашение в круг ${circleId}`);
+    console.log(`❌ Пользователь ${uid} отклонил приглашение в круг ${circleId}`);
     
     return { success: true, message: 'Invitation declined' };
   } catch (error) {
@@ -451,69 +478,85 @@ async function declineInvite(circleId, userId) {
 /**
  * Присоединиться к кругу по invite коду
  */
-async function joinByCode(inviteCode, userId) {
+async function joinByCode(inviteCode, userId, deps = {}) {
   try {
-    const db = getDB();
+    const uid = toValidUserId(userId);
+    const normalizedCode = typeof inviteCode === 'string' ? inviteCode.trim().toUpperCase() : '';
+    if (!normalizedCode) {
+      throw new Error('Circle not found');
+    }
+
+    const db = deps.db || getDB();
     const circles = db.collection('circles');
     const users = db.collection('users');
     
     // Находим круг по коду
-    const circle = await circles.findOne({ inviteCode: inviteCode.toUpperCase() });
+    const circle = await circles.findOne({ inviteCode: normalizedCode });
     
     if (!circle) {
       throw new Error('Circle not found');
     }
     
-    // Проверяем не состоит ли уже
-    const existingMember = circle.members.find(m => m.userId === parseInt(userId));
+    // Проверяем существующую запись участника
+    const existingMember = circle.members.find(m => Number(m.userId) === uid);
     
     if (existingMember) {
       if (existingMember.status === 'active') {
         throw new Error('Already a member');
       }
-      
-      // Если был pending или declined - активируем
-      await circles.updateOne(
-        { 
+      if (existingMember.status === 'removed') {
+        throw new Error('You were removed from this circle');
+      }
+    }
+
+    // Проверяем лимит участников до реактивации и до добавления нового участника
+    const maxMembers = circle.settings?.maxMembers || 10;
+    const activeCount = circle.members.filter(m => m.status === 'active').length;
+    if (activeCount >= maxMembers) {
+      throw new Error('Circle is full');
+    }
+
+    const now = new Date().toISOString();
+
+    if (existingMember) {
+      // Если был pending, declined или left — атомарно активируем
+      const reactivateRes = await circles.updateOne(
+        {
           circleId: circle.circleId,
-          'members.userId': parseInt(userId)
+          members: { $elemMatch: { userId: uid, status: { $in: ['pending', 'declined', 'left'] } } }
         },
         {
           $set: {
             'members.$.status': 'active',
-            'members.$.joinedAt': new Date().toISOString(),
-            updatedAt: new Date().toISOString()
+            'members.$.joinedAt': now,
+            updatedAt: now
           }
         }
       );
+      if (reactivateRes.modifiedCount === 0) {
+        throw new Error('Already a member');
+      }
       
-      console.log(`✅ Пользователь ${userId} присоединился к кругу ${circle.name} (реактивация)`);
+      const updatedCircle = await circles.findOne({ circleId: circle.circleId }) || circle;
+      console.log(`✅ Пользователь ${uid} присоединился к кругу ${circle.name} (реактивация)`);
       
-      return { success: true, circle };
-    }
-    
-    // Проверяем лимит
-    const activeCount = circle.members.filter(m => m.status === 'active').length;
-    if (activeCount >= circle.settings.maxMembers) {
-      throw new Error('Circle is full');
+      return { success: true, circle: updatedCircle };
     }
     
     // Получаем данные пользователя
-    const user = await users.findOne({ userId: parseInt(userId) });
+    const user = await users.findOne({ userId: uid });
     
     if (!user) {
       throw new Error('User not found');
     }
     
-    // Добавляем нового участника
-    const now = new Date().toISOString();
-    
-    await circles.updateOne(
-      { circleId: circle.circleId },
+    // Атомарно добавляем нового участника с защитой от дублирующегося вступления
+    const pushRes = await circles.updateOne(
+      { circleId: circle.circleId, 'members.userId': { $ne: uid } },
       {
         $push: {
           members: {
-            userId: parseInt(userId),
+            userId: uid,
             username: user.username || '',
             name: user.name || 'User',
             photoUrl: user.photoUrl || '',
@@ -525,10 +568,14 @@ async function joinByCode(inviteCode, userId) {
         $set: { updatedAt: now }
       }
     );
+    if (pushRes.modifiedCount === 0) {
+      throw new Error('Already a member');
+    }
     
-    console.log(`✅ Пользователь ${userId} присоединился к кругу ${circle.name} по коду ${inviteCode}`);
+    const updatedCircle = await circles.findOne({ circleId: circle.circleId }) || circle;
+    console.log(`✅ Пользователь ${uid} присоединился к кругу ${circle.name} по коду ${normalizedCode}`);
     
-    return { success: true, circle };
+    return { success: true, circle: updatedCircle };
   } catch (error) {
     console.error('❌ Ошибка присоединения по коду:', error);
     throw error;
@@ -536,12 +583,13 @@ async function joinByCode(inviteCode, userId) {
 }
 
 // Выйти из круга
-async function leaveCircle(circleId, userId) {
+async function leaveCircle(circleId, userId, deps = {}) {
   try {
-    const db = await getDB();
+    const uid = toValidUserId(userId);
+    const db = deps.db || getDB();
     const circles = db.collection('circles');
     
-    console.log(`🚪 Попытка выхода: userId=${userId}, circleId=${circleId}`);
+    console.log(`🚪 Попытка выхода: userId=${uid}, circleId=${circleId}`);
     
     // Получаем круг
     const circle = await circles.findOne({ circleId });
@@ -550,33 +598,32 @@ async function leaveCircle(circleId, userId) {
       throw new Error('Circle not found');
     }
     
-    // Проверяем что пользователь не владелец
-    if (circle.ownerId === parseInt(userId)) {
+    // Единственный владелец не может выйти из круга — должен удалить круг
+    const memberRecord = circle.members.find(m => Number(m.userId) === uid);
+    if (Number(circle.ownerId) === uid || memberRecord?.role === 'owner') {
       throw new Error('Owner cannot leave the circle. Delete the circle instead.');
     }
     
-    // Проверяем что пользователь участник
-    const memberIndex = circle.members.findIndex(
-      m => (m.userId === parseInt(userId) || m.userId === userId) && 
-           (m.status === 'active' || m.status === 'pending')
-    );
-    
-    if (memberIndex === -1) {
-      throw new Error('You are not a member of this circle');
-    }
-    
-    // Меняем статус на 'left'
-    await circles.updateOne(
-      { circleId },
-      { 
-        $set: { 
-          [`members.${memberIndex}.status`]: 'left',
-          [`members.${memberIndex}.leftAt`]: new Date()
-        } 
+    // Атомарно меняем статус на 'left' через $elemMatch
+    const result = await circles.updateOne(
+      {
+        circleId,
+        members: { $elemMatch: { userId: uid, status: { $in: ['active', 'pending'] } } }
+      },
+      {
+        $set: {
+          'members.$.status': 'left',
+          'members.$.leftAt': new Date(),
+          updatedAt: new Date().toISOString()
+        }
       }
     );
     
-    console.log(`✅ Пользователь ${userId} вышел из круга ${circleId}`);
+    if (result.modifiedCount === 0) {
+      throw new Error('You are not a member of this circle');
+    }
+    
+    console.log(`✅ Пользователь ${uid} вышел из круга ${circleId}`);
     
     return { success: true };
   } catch (error) {
@@ -586,12 +633,14 @@ async function leaveCircle(circleId, userId) {
 }
 
 // Удалить участника из круга (kick)
-async function removeMember(circleId, ownerId, targetUserId) {
+async function removeMember(circleId, ownerId, targetUserId, deps = {}) {
   try {
-    const db = await getDB();
+    const ownerUid = toValidUserId(ownerId);
+    const targetUid = toValidUserId(targetUserId);
+    const db = deps.db || getDB();
     const circles = db.collection('circles');
     
-    console.log(`🗑️ Попытка удаления участника: ownerId=${ownerId}, targetUserId=${targetUserId}, circleId=${circleId}`);
+    console.log(`🗑️ Попытка удаления участника: ownerId=${ownerUid}, targetUserId=${targetUid}, circleId=${circleId}`);
     
     // Получаем круг
     const circle = await circles.findOne({ circleId });
@@ -601,36 +650,35 @@ async function removeMember(circleId, ownerId, targetUserId) {
     }
     
     // Проверяем что запрашивающий - владелец
-    if (circle.ownerId !== parseInt(ownerId)) {
+    if (Number(circle.ownerId) !== ownerUid) {
       throw new Error('Only owner can remove members');
     }
     
     // Нельзя удалить самого себя
-    if (parseInt(targetUserId) === parseInt(ownerId)) {
+    if (targetUid === ownerUid) {
       throw new Error('Cannot remove yourself. Delete the circle instead.');
     }
     
-    // Находим участника
-    const memberIndex = circle.members.findIndex(
-      m => (m.userId === parseInt(targetUserId) || m.userId === targetUserId)
-    );
-    
-    if (memberIndex === -1) {
-      throw new Error('Member not found');
-    }
-    
-    // Меняем статус на 'removed'
-    await circles.updateOne(
-      { circleId },
-      { 
-        $set: { 
-          [`members.${memberIndex}.status`]: 'removed',
-          [`members.${memberIndex}.removedAt`]: new Date()
-        } 
+    // Атомарно меняем статус активного или приглашённого участника на 'removed'
+    const result = await circles.updateOne(
+      {
+        circleId,
+        members: { $elemMatch: { userId: targetUid, status: { $in: ['active', 'pending'] } } }
+      },
+      {
+        $set: {
+          'members.$.status': 'removed',
+          'members.$.removedAt': new Date(),
+          updatedAt: new Date().toISOString()
+        }
       }
     );
     
-    console.log(`✅ Участник ${targetUserId} удален из круга ${circleId}`);
+    if (result.modifiedCount === 0) {
+      throw new Error('Member not found');
+    }
+    
+    console.log(`✅ Участник ${targetUid} удален из круга ${circleId}`);
     
     return { success: true };
   } catch (error) {
@@ -641,12 +689,13 @@ async function removeMember(circleId, ownerId, targetUserId) {
 
 
 // Удалить круг полностью
-async function deleteCircle(circleId, ownerId) {
+async function deleteCircle(circleId, ownerId, deps = {}) {
   try {
-    const db = await getDB();
+    const ownerUid = toValidUserId(ownerId);
+    const db = deps.db || getDB();
     const circles = db.collection('circles');
     
-    console.log(`🗑️ Попытка удаления круга: ownerId=${ownerId}, circleId=${circleId}`);
+    console.log(`🗑️ Попытка удаления круга: ownerId=${ownerUid}, circleId=${circleId}`);
     
     // Получаем круг
     const circle = await circles.findOne({ circleId });
@@ -656,12 +705,12 @@ async function deleteCircle(circleId, ownerId) {
     }
     
     // Проверяем что запрашивающий - владелец
-    if (circle.ownerId !== parseInt(ownerId)) {
+    if (Number(circle.ownerId) !== ownerUid) {
       throw new Error('Only owner can delete the circle');
     }
     
-    // Удаляем круг
-    await circles.deleteOne({ circleId });
+    // Атомарно удаляем круг только при совпадении ownerId
+    await circles.deleteOne({ circleId, ownerId: ownerUid });
     
     console.log(`✅ Круг ${circleId} удален`);
     

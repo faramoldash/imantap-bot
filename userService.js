@@ -482,7 +482,8 @@ async function _updateUserProgressLocked(userId, progressData, deps = {}) {
     if (progressData.dailyQuranGoal !== undefined) updateFields.dailyQuranGoal = progressData.dailyQuranGoal;
     if (progressData.dailyCharityGoal !== undefined) updateFields.dailyCharityGoal = progressData.dailyCharityGoal;
     if (progressData.language !== undefined) updateFields.language = progressData.language;
-    if (progressData.hasRedeemedReferral !== undefined) updateFields.hasRedeemedReferral = progressData.hasRedeemedReferral;
+    // hasRedeemedReferral управляется только сервером при применении промокода/реферальной ссылки —
+    // клиентский sync не должен сбрасывать или подменять этот флаг.
     if (progressData.unlockedBadges !== undefined) updateFields.unlockedBadges = progressData.unlockedBadges;
 
     // ─── НОВЫЕ ПОЛЯ v2 ───
@@ -752,15 +753,167 @@ async function updateUserOnboarding(userId, data) {
   return result.modifiedCount > 0;
 }
 
-async function checkPromoCode(promoCode, userId) {
-  const db = getDB();
+/**
+ * Извлекает документ из результата collection.findOneAndUpdate.
+ * В mongodb@5.9.2 findOneAndUpdate возвращает ModifyResult `{ value, ok, lastErrorObject }`,
+ * где `value` равен `null`, если документ не найден.
+ * Также безопасно поддерживает прямой возврат документа (mongodb@6+ / includeResultMetadata: false).
+ */
+function unwrapModifyResult(result) {
+  if (!result) return null;
+  if (typeof result === 'object' && Object.prototype.hasOwnProperty.call(result, 'value')) {
+    return result.value ?? null;
+  }
+  return result;
+}
+
+async function checkPromoCode(promoCode, userId, deps = {}) {
+  const normalizedCode = typeof promoCode === 'string' ? promoCode.trim().toUpperCase() : '';
+  if (!normalizedCode) return { valid: false, reason: 'not_found' };
+
+  const db = deps.db || getDB();
   const users = db.collection('users');
-  const normalizedCode = promoCode.toUpperCase();
+  const uid = parseInt(userId, 10);
+
   const owner = await users.findOne({ promoCode: normalizedCode });
   if (!owner) return { valid: false, reason: 'not_found' };
-  if (owner.userId === userId) return { valid: false, reason: 'own_code' };
+  if (Number(owner.userId) === uid) return { valid: false, reason: 'own_code' };
   if (owner.paymentStatus !== 'paid') return { valid: false, reason: 'owner_not_paid' };
+
+  if (Number.isInteger(uid)) {
+    const currentUser = await users.findOne(
+      { userId: uid },
+      { projection: { hasRedeemedReferral: 1, usedPromoCode: 1, referredBy: 1 } }
+    );
+    if (currentUser && (currentUser.hasRedeemedReferral || currentUser.usedPromoCode || currentUser.referredBy)) {
+      return { valid: false, reason: 'already_redeemed' };
+    }
+  }
+
   return { valid: true, owner };
+}
+
+/**
+ * Атомарно привязывает реферальный код / промокод к пользователю.
+ * Защищает от самореферала, повторного ввода и race condition.
+ */
+async function redeemReferralCode(userId, promoCode, {
+  source = 'promo',
+  requirePaidOwner = true,
+  paidAmount = undefined,
+  db = null,
+} = {}) {
+  const uid = parseInt(userId, 10);
+  const normalizedCode = typeof promoCode === 'string' ? promoCode.trim().toUpperCase() : '';
+  if (!Number.isInteger(uid) || !normalizedCode) {
+    return { success: false, reason: 'not_found' };
+  }
+
+  const database = db || getDB();
+  const users = database.collection('users');
+
+  const owner = await users.findOne({ promoCode: normalizedCode });
+  if (!owner) return { success: false, reason: 'not_found' };
+  if (Number(owner.userId) === uid) return { success: false, reason: 'own_code' };
+  if (requirePaidOwner && owner.paymentStatus !== 'paid') {
+    return { success: false, reason: 'owner_not_paid' };
+  }
+
+  const updateSet = {
+    hasDiscount: true,
+    hasRedeemedReferral: true,
+    updatedAt: new Date(),
+  };
+  if (source === 'link') {
+    updateSet.referredBy = normalizedCode;
+  } else {
+    updateSet.usedPromoCode = normalizedCode;
+  }
+  if (paidAmount !== undefined) {
+    updateSet.paidAmount = paidAmount;
+  }
+
+  const modifyResult = await users.findOneAndUpdate(
+    {
+      userId: uid,
+      hasRedeemedReferral: { $ne: true },
+      referredBy: null,
+      usedPromoCode: null,
+    },
+    { $set: updateSet },
+    { returnDocument: 'after' }
+  );
+
+  const updatedUser = unwrapModifyResult(modifyResult);
+  if (!updatedUser) {
+    return { success: false, reason: 'already_redeemed' };
+  }
+
+  return { success: true, owner, user: updatedUser, code: normalizedCode };
+}
+
+/**
+ * Реферальная статистика текущего авторизованного пользователя.
+ * Если передан promoCode, проверяет, что он принадлежит этому пользователю.
+ */
+async function getReferralStats(userId, { promoCode = null, db = null } = {}) {
+  const uid = parseInt(userId, 10);
+  if (!Number.isInteger(uid)) {
+    return { ok: false, status: 400, error: 'Invalid userId' };
+  }
+
+  const database = db || getDB();
+  const users = database.collection('users');
+  const user = await users.findOne(
+    { userId: uid },
+    {
+      projection: {
+        userId: 1,
+        promoCode: 1,
+        invitedCount: 1,
+        hasRedeemedReferral: 1,
+        referredBy: 1,
+        usedPromoCode: 1,
+      },
+    }
+  );
+  if (!user) {
+    return { ok: false, status: 404, error: 'User not found' };
+  }
+
+  const ownCode = (user.promoCode || '').toUpperCase();
+  if (typeof promoCode === 'string' && promoCode.trim()) {
+    const requestedCode = promoCode.trim().toUpperCase();
+    if (!ownCode || requestedCode !== ownCode) {
+      return { ok: false, status: 403, error: 'You can only access your own referral stats' };
+    }
+  }
+
+  let referrals = [];
+  if (ownCode) {
+    referrals = await users.find({
+      $or: [{ referredBy: ownCode }, { usedPromoCode: ownCode }],
+    })
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .project({ userId: 1, name: 1, username: 1, paymentStatus: 1, createdAt: 1 })
+      .toArray();
+  }
+
+  const paidCount = referrals.filter(r => r.paymentStatus === 'paid').length;
+
+  return {
+    ok: true,
+    data: {
+      promoCode: ownCode || null,
+      invitedCount: user.invitedCount || 0,
+      actualReferredCount: referrals.length,
+      paidCount,
+      hasRedeemedReferral: Boolean(user.hasRedeemedReferral || user.referredBy || user.usedPromoCode),
+      referredBy: user.referredBy || user.usedPromoCode || null,
+      referrals,
+    },
+  };
 }
 
 async function updatePaymentStatus(userId, status, additionalData = {}) {
@@ -913,12 +1066,15 @@ async function getUserRank(userId) {
   } catch (error) { console.error('❌ getUserRank:', error); throw error; }
 }
 
-async function getFriendsLeaderboard(userId, limit = 20) {
+async function getFriendsLeaderboard(userId, limit = 20, deps = {}) {
   try {
-    const users = getDB().collection('users');
-    const user = await users.findOne({ userId: parseInt(userId) });
-    if (!user) return [];
-    return await users.find({ referredBy: user.promoCode, paymentStatus: { $in: ['paid', 'demo'] } })
+    const users = (deps.db || getDB()).collection('users');
+    const user = await users.findOne({ userId: parseInt(userId, 10) });
+    if (!user || !user.promoCode) return [];
+    return await users.find({
+      $or: [{ referredBy: user.promoCode }, { usedPromoCode: user.promoCode }],
+      paymentStatus: { $in: ['paid', 'demo'] }
+    })
       .sort({ xp: -1 }).limit(limit)
       .project({ userId: 1, username: 1, name: 1, photoUrl: 1, xp: 1, currentStreak: 1, unlockedBadges: 1 })
       .toArray();
@@ -973,16 +1129,26 @@ async function getFilteredLeaderboard(options = {}) {
   } catch (error) { console.error('❌ getFilteredLeaderboard:', error); throw error; }
 }
 
-async function addReferralXP(userId, type = 'registration', referredUserId = null, referredUserName = null) {
-  return withUserLock(userId, async () => {
+async function addReferralXP(userId, type = 'registration', referredUserId = null, referredUserName = null, deps = {}) {
+  const inviterUid = parseInt(userId, 10);
+  const referredUid = referredUserId !== null && referredUserId !== undefined ? parseInt(referredUserId, 10) : null;
+  if (!Number.isInteger(inviterUid)) {
+    return { success: false, reason: 'invalid_user' };
+  }
+  if (referredUid !== null && inviterUid === referredUid) {
+    return { success: false, reason: 'self_referral' };
+  }
+
+  return withUserLock(inviterUid, async () => {
     try {
-      const now = new Date();
+      const now = deps.nowFn ? deps.nowFn() : new Date();
       if (now.getTime() > EID_AL_FITR_MS) return { success: false, reason: 'period_ended' };
-      const users = getDB().collection('users');
+      const users = (deps.db || getDB()).collection('users');
+      const addContestXpFn = deps.addContestXp || addContestXp;
 
       // Читаем только timezone — один лёгкий запрос
       const userTz = await users.findOne(
-        { userId: parseInt(userId) },
+        { userId: inviterUid },
         { projection: { 'location.timezone': 1 } }
       );
       if (!userTz) return { success: false, reason: 'user_not_found' };
@@ -994,30 +1160,32 @@ async function addReferralXP(userId, type = 'registration', referredUserId = nul
         finalXP = 400;
         // Атомарно добавляем XP — без read-then-write
         await users.updateOne(
-          { userId: parseInt(userId) },
-          { $inc: { xp: finalXP }, $set: { updatedAt: new Date() } }
+          { userId: inviterUid },
+          { $inc: { xp: finalXP }, $set: { updatedAt: now } }
         );
-        addContestXp(userId, finalXP).catch(err =>
-          console.error(`❌ addContestXp referral-payment error for ${userId}:`, err)
+        addContestXpFn(inviterUid, finalXP).catch(err =>
+          console.error(`❌ addContestXp referral-payment error for ${inviterUid}:`, err)
         );
       } else {
         // Атомарно инкрементируем счётчик рефералов и invitedCount,
         // получаем новое значение после инкремента (returnDocument: 'after')
-        const updated = await users.findOneAndUpdate(
-          { userId: parseInt(userId) },
+        // В mongodb@5.9.2 findOneAndUpdate возвращает { value, ok }, разворачиваем через unwrapModifyResult
+        const updatedRes = await users.findOneAndUpdate(
+          { userId: inviterUid },
           {
             $inc: {
               [`dailyReferrals.${todayDateStr}`]: 1,
               invitedCount: 1,
             },
-            $set: { updatedAt: new Date() },
+            $set: { updatedAt: now },
           },
           { returnDocument: 'after', projection: { dailyReferrals: 1 } }
         );
-        if (!updated) return { success: false, reason: 'user_not_found' };
+        const updatedDoc = unwrapModifyResult(updatedRes);
+        if (!updatedDoc) return { success: false, reason: 'user_not_found' };
 
         // Рассчитываем мультипликатор по актуальному (уже записанному) счётчику
-        todayCount = updated.dailyReferrals?.[todayDateStr] || 1;
+        todayCount = updatedDoc.dailyReferrals?.[todayDateStr] || 1;
         if (todayCount >= 50) multiplier = 2.0;
         else if (todayCount >= 20) multiplier = 1.6;
         else if (todayCount >= 5) multiplier = 1.3;
@@ -1025,11 +1193,11 @@ async function addReferralXP(userId, type = 'registration', referredUserId = nul
 
         // Атомарно добавляем XP
         await users.updateOne(
-          { userId: parseInt(userId) },
+          { userId: inviterUid },
           { $inc: { xp: finalXP } }
         );
-        addContestXp(userId, finalXP).catch(err =>
-          console.error(`❌ addContestXp referral-reg error for ${userId}:`, err)
+        addContestXpFn(inviterUid, finalXP).catch(err =>
+          console.error(`❌ addContestXp referral-reg error for ${inviterUid}:`, err)
         );
       }
 
@@ -1043,31 +1211,36 @@ async function addReferralXP(userId, type = 'registration', referredUserId = nul
  * Возвращает true только если флаг только что выставлен нами — XP можно начислять.
  * Повторный вызов вернёт false — гарантия от race condition и двойного начисления.
  */
-async function claimReferralBonus(userId) {
-  const result = await getDB().collection('users').findOneAndUpdate(
-    { userId: parseInt(userId), referralBonusGiven: { $ne: true } },
+async function claimReferralBonus(userId, deps = {}) {
+  const uid = parseInt(userId, 10);
+  if (!Number.isInteger(uid)) return false;
+  const result = await (deps.db || getDB()).collection('users').findOneAndUpdate(
+    { userId: uid, referralBonusGiven: { $ne: true } },
     { $set: { referralBonusGiven: true, updatedAt: new Date() } }
   );
-  return result !== null;
+  return unwrapModifyResult(result) !== null;
 }
 
 /**
  * Атомарно выставляет флаг paymentBonusGiven.
  * Возвращает true только если флаг только что выставлен нами — XP можно начислять.
  */
-async function claimPaymentBonus(userId) {
-  const result = await getDB().collection('users').findOneAndUpdate(
-    { userId: parseInt(userId), paymentBonusGiven: { $ne: true } },
+async function claimPaymentBonus(userId, deps = {}) {
+  const uid = parseInt(userId, 10);
+  if (!Number.isInteger(uid)) return false;
+  const result = await (deps.db || getDB()).collection('users').findOneAndUpdate(
+    { userId: uid, paymentBonusGiven: { $ne: true } },
     { $set: { paymentBonusGiven: true, updatedAt: new Date() } }
   );
-  return result !== null;
+  return unwrapModifyResult(result) !== null;
 }
 
 export {
   XP_VALUES, GOAL_CATEGORY_MAX_XP, LEGACY_GOAL_CATEGORY_MAP, TASBEEH_XP,
-  normalizeGoalCategoryId, isMondayOrThursday,
+  normalizeGoalCategoryId, isMondayOrThursday, unwrapModifyResult,
   getOrCreateUser, getUserById, getUserByPromoCode, incrementReferralCount,
   updateUserProgress, getUserFullData, updateUserOnboarding, checkPromoCode,
+  redeemReferralCode, getReferralStats,
   updatePaymentStatus, approvePayment, rejectPayment, getUserAccess,
   getPendingPayments, checkDemoExpiration, addUserXP, getGlobalLeaderboard,
   getUserRank, getFriendsLeaderboard, getCountries, getCities,

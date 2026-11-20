@@ -3,6 +3,7 @@ import { getDB } from './db.js';
 import {
   getUserAccess, updateUserProgress, getUserFullData,
   getFriendsLeaderboard, getCities, getFilteredLeaderboard,
+  getReferralStats,
 } from './userService.js';
 import {
   createCircle, getUserCircles, getCircleDetails, inviteToCircle,
@@ -484,20 +485,42 @@ export function createApiServer({
       }
     }
 
+    // ─── Referrals API ──────────────────────────────────────────────────────
+    if (url.pathname === '/api/referrals' && req.method === 'GET') {
+      try {
+        const promoCode = url.searchParams.get('code');
+        const result = await getReferralStats(authUserId, { promoCode, db: getDb() });
+        if (!result.ok) {
+          res.statusCode = result.status || 400;
+          res.end(JSON.stringify({ success: false, error: result.error }));
+          return;
+        }
+        res.statusCode = 200;
+        res.end(JSON.stringify({ success: true, data: result.data }));
+        return;
+      } catch (err) {
+        console.error('❌ API /api/referrals:', err);
+        res.statusCode = 500;
+        res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
+        return;
+      }
+    }
+
     // ─── Contest API ────────────────────────────────────────────────────────
     if (url.pathname === '/api/contest/current') {
       try {
         const requestedUserId = parseInt(url.searchParams.get('userId'));
         if (requestedUserId && !requireCurrentUser(requestedUserId)) return;
         const userId = authUserId;
-        const contest = await getCurrentContest();
+        const dbDeps = getDb !== getDB ? { db: getDb() } : {};
+        const contest = await getCurrentContest(dbDeps);
         if (!contest) {
           res.statusCode = 200;
           res.end(JSON.stringify({ success: true, data: null }));
           return;
         }
         const participant = userId
-          ? await getUserContestRank(contest._id.toString(), userId)
+          ? await getUserContestRank(contest._id.toString(), userId, dbDeps)
           : { rank: null, xp: 0, xpToNext: null };
         res.statusCode = 200;
         res.end(JSON.stringify({ success: true, data: { contest, participant } }));
@@ -513,8 +536,10 @@ export function createApiServer({
     if (url.pathname.match(/^\/api\/contest\/[a-f0-9]{24}\/leaderboard$/)) {
       try {
         const contestId = url.pathname.split('/')[3];
-        const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 100);
-        const leaderboard = await getContestLeaderboard(contestId, limit);
+        const rawLimit = parseInt(url.searchParams.get('limit') || '50', 10);
+        const limit = Math.min(Math.max(Number.isFinite(rawLimit) ? rawLimit : 50, 1), 100);
+        const dbDeps = getDb !== getDB ? { db: getDb() } : {};
+        const leaderboard = await getContestLeaderboard(contestId, limit, dbDeps);
         res.statusCode = 200;
         res.end(JSON.stringify({ success: true, data: leaderboard }));
         return;
@@ -536,7 +561,7 @@ export function createApiServer({
           const { name, description } = JSON.parse(body);
           const userId = authUserId;
           
-          const result = await createCircle(userId, name, description);
+          const result = await createCircle(userId, name, description, { db: getDb() });
           
           res.statusCode = 200;
           res.end(JSON.stringify(result));
@@ -556,7 +581,7 @@ export function createApiServer({
         const userId = url.pathname.split('/')[4];
         if (!requireCurrentUser(userId)) return;
         
-        const circles = await getUserCircles(userId);
+        const circles = await getUserCircles(userId, { db: getDb() });
         
         res.statusCode = 200;
         res.end(JSON.stringify({ success: true, data: circles }));
@@ -582,13 +607,15 @@ export function createApiServer({
         }
         if (!requireCurrentUser(userId)) return;
         
-        const details = await getCircleDetails(circleId, userId);
+        const details = await getCircleDetails(circleId, userId, { db: getDb() });
         
         res.statusCode = 200;
         res.end(JSON.stringify({ success: true, data: details }));
       } catch (error) {
         console.error('❌ API Error /circles/details:', error);
-        res.statusCode = 500;
+        if (error.message === 'Access denied') res.statusCode = 403;
+        else if (error.message === 'Circle not found') res.statusCode = 404;
+        else res.statusCode = 500;
         res.end(JSON.stringify({ success: false, error: error.message }));
       }
       
@@ -611,7 +638,7 @@ export function createApiServer({
             targetUsername
           });
           
-          const result = await inviteToCircle(circleId, inviterId, targetUsername);
+          const result = await inviteToCircle(circleId, inviterId, targetUsername, { db: getDb() });
           
           // ✅ ДОБАВИТЬ: Отправка уведомления в Telegram
           if (result.success && result.targetUserId) {
@@ -648,7 +675,9 @@ export function createApiServer({
           res.end(JSON.stringify(result));
         } catch (error) {
           console.error('❌ API Error /circles/invite:', error.message);
-          res.statusCode = 400;
+          if (error.message === 'Only owner can invite') res.statusCode = 403;
+          else if (error.message === 'Circle not found') res.statusCode = 404;
+          else res.statusCode = 400;
           res.end(JSON.stringify({ success: false, error: error.message }));
         }
       });
@@ -666,12 +695,12 @@ export function createApiServer({
           const { circleId } = JSON.parse(body);
           const userId = authUserId;
           
-          const result = await acceptInvite(circleId, userId);
+          const db = getDb();
+          const result = await acceptInvite(circleId, userId, { db });
 
           // ✅ ДОБАВИТЬ: Уведомление владельцу о принятии приглашения
           if (result.success) {
             try {
-              const db = await getDB();
               const circles = db.collection('circles');
               const users = db.collection('users');
               
@@ -729,12 +758,12 @@ export function createApiServer({
           
           console.log('🔍 LEAVE REQUEST:', { circleId, userId });
           
-          const result = await leaveCircle(circleId, userId);
+          const db = getDb();
+          const result = await leaveCircle(circleId, userId, { db });
 
           // ✅ ДОБАВИТЬ: Уведомление владельцу о выходе участника
           if (result.success) {
             try {
-              const db = await getDB();
               const circles = db.collection('circles');
               const users = db.collection('users');
               
@@ -792,12 +821,12 @@ export function createApiServer({
           
           console.log('🔍 REMOVE MEMBER REQUEST:', { circleId, ownerId, targetUserId });
           
-          const result = await removeMember(circleId, ownerId, targetUserId);
+          const db = getDb();
+          const result = await removeMember(circleId, ownerId, targetUserId, { db });
 
           // ✅ ДОБАВИТЬ: Уведомление удаленному участнику
           if (result.success) {
             try {
-              const db = await getDB();
               const circles = db.collection('circles');
               
               const circle = await circles.findOne({ circleId });
@@ -823,7 +852,9 @@ export function createApiServer({
           res.end(JSON.stringify(result));
         } catch (error) {
           console.error('❌ API Error /circles/remove-member:', error.message);
-          res.statusCode = 400;
+          if (error.message === 'Only owner can remove members') res.statusCode = 403;
+          else if (error.message === 'Circle not found') res.statusCode = 404;
+          else res.statusCode = 400;
           res.end(JSON.stringify({ success: false, error: error.message }));
         }
       });
@@ -843,13 +874,15 @@ export function createApiServer({
           
           console.log('🔍 DELETE CIRCLE REQUEST:', { circleId, ownerId });
           
-          const result = await deleteCircle(circleId, ownerId);
+          const result = await deleteCircle(circleId, ownerId, { db: getDb() });
           
           res.statusCode = 200;
           res.end(JSON.stringify(result));
         } catch (error) {
           console.error('❌ API Error /circles/delete:', error.message);
-          res.statusCode = 400;
+          if (error.message === 'Only owner can delete the circle') res.statusCode = 403;
+          else if (error.message === 'Circle not found') res.statusCode = 404;
+          else res.statusCode = 400;
           res.end(JSON.stringify({ success: false, error: error.message }));
         }
       });
@@ -867,7 +900,7 @@ export function createApiServer({
           const { circleId } = JSON.parse(body);
           const userId = authUserId;
           
-          const result = await declineInvite(circleId, userId);
+          const result = await declineInvite(circleId, userId, { db: getDb() });
           
           res.statusCode = 200;
           res.end(JSON.stringify(result));
@@ -893,33 +926,37 @@ export function createApiServer({
           
           console.log('🔗 JOIN REQUEST:', { inviteCode, userId });
           
-          const result = await joinByCode(inviteCode, userId);
+          const db = getDb();
+          const result = await joinByCode(inviteCode, userId, { db });
 
-          // ✅ ДОБАВИТЬ: Уведомление владельцу о новом участнике
-          try {
-            const joiningUser = await db.collection('users').findOne({ userId: parseInt(userId) });
-            const miniAppUrl = getMiniAppDeepLink();
-            
-            const message = 
-              `🎉 <b>Топқа жаңа адам қосылды!</b>\n\n` +
-              `👤 <b>${joiningUser?.name || 'қатысушы'}</b> <b>"${updatedCircle.name}"</b> тобына қосылды\n\n` +
-              `👥 Қазір қатысушылар: ${updatedCircle.members.filter(m => m.status === 'active').length}`;
-            
-            await bot.sendMessage(updatedCircle.ownerId, message, {
-              parse_mode: 'HTML',
-              reply_markup: {
-                inline_keyboard: [[
-                  {
-                    text: '👀 Топты ашу',
-                    url: miniAppUrl
-                  }
-                ]]
-              }
-            });
-            
-            console.log(`📬 Уведомление о присоединении отправлено владельцу ${updatedCircle.ownerId}`);
-          } catch (notifyError) {
-            console.error('❌ Ошибка отправки уведомления:', notifyError.message);
+          // ✅ Уведомление владельцу о новом участнике
+          if (result.success && result.circle) {
+            try {
+              const updatedCircle = result.circle;
+              const joiningUser = await db.collection('users').findOne({ userId: parseInt(userId) });
+              const miniAppUrl = getMiniAppDeepLink();
+              
+              const message = 
+                `🎉 <b>Топқа жаңа адам қосылды!</b>\n\n` +
+                `👤 <b>${joiningUser?.name || 'қатысушы'}</b> <b>"${updatedCircle.name}"</b> тобына қосылды\n\n` +
+                `👥 Қазір қатысушылар: ${updatedCircle.members.filter(m => m.status === 'active').length}`;
+              
+              await bot.sendMessage(updatedCircle.ownerId, message, {
+                parse_mode: 'HTML',
+                reply_markup: {
+                  inline_keyboard: [[
+                    {
+                      text: '👀 Топты ашу',
+                      url: miniAppUrl
+                    }
+                  ]]
+                }
+              });
+              
+              console.log(`📬 Уведомление о присоединении отправлено владельцу ${updatedCircle.ownerId}`);
+            } catch (notifyError) {
+              console.error('❌ Ошибка отправки уведомления:', notifyError.message);
+            }
           }
           
           res.statusCode = 200;
