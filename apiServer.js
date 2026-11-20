@@ -11,11 +11,17 @@ import {
 import {
   getCurrentContest, getContestLeaderboard, getUserContestRank,
 } from './services/contestService.js';
-import { SHAWWAL_START_DATE, SHAWWAL_END_DATE } from './config.js';
+import { SHAWWAL_START_DATE, SHAWWAL_END_DATE, getMiniAppDeepLink } from './config.js';
 import { getKazakhstanCities } from './utils/cityMapping.js';
 import { verifyTelegramInitData } from './utils/telegramAuth.js';
 
 export function startApiServer({ bot, port, miniAppUrl, checkRateLimit }) {
+  if (!process.env.BOT_USERNAME?.trim() || !process.env.MINI_APP_NAME?.trim()) {
+    console.warn(
+      `⚠️ BOT_USERNAME или MINI_APP_NAME не заданы в .env — для Telegram-диплинков используется фолбэк: ${getMiniAppDeepLink()}`
+    );
+  }
+
   const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://localhost:${port}`);
   
@@ -520,7 +526,7 @@ export function startApiServer({ bot, port, miniAppUrl, checkRateLimit }) {
           // ✅ ДОБАВИТЬ: Отправка уведомления в Telegram
           if (result.success && result.targetUserId) {
             try {
-              const miniAppUrl = `https://t.me/${process.env.BOT_USERNAME}/${process.env.MINI_APP_NAME}`;
+              const miniAppUrl = getMiniAppDeepLink();
               
               const message = 
                 `👋 <b>${result.inviterUsername}</b> сізді топқа шақырды!\n\n` +
@@ -583,7 +589,7 @@ export function startApiServer({ bot, port, miniAppUrl, checkRateLimit }) {
               const acceptingUser = await users.findOne({ userId: parseInt(userId) });
               
               if (circle && acceptingUser) {
-                const miniAppUrl = `https://t.me/${process.env.BOT_USERNAME}/${process.env.MINI_APP_NAME}`;
+                const miniAppUrl = getMiniAppDeepLink();
                 
                 const message = 
                   `✅ <b>Шақыру қабылданды!</b>\n\n` +
@@ -646,7 +652,7 @@ export function startApiServer({ bot, port, miniAppUrl, checkRateLimit }) {
               const leavingUser = await users.findOne({ userId: parseInt(userId) });
               
               if (circle && leavingUser) {
-                const miniAppUrl = `https://t.me/${process.env.BOT_USERNAME}/${process.env.MINI_APP_NAME}`;
+                const miniAppUrl = getMiniAppDeepLink();
                 
                 const message = 
                   `🚪 <b>Қатысушы топтан шықты</b>\n\n` +
@@ -802,7 +808,7 @@ export function startApiServer({ bot, port, miniAppUrl, checkRateLimit }) {
           // ✅ ДОБАВИТЬ: Уведомление владельцу о новом участнике
           try {
             const joiningUser = await db.collection('users').findOne({ userId: parseInt(userId) });
-            const miniAppUrl = `https://t.me/${process.env.BOT_USERNAME}/${process.env.MINI_APP_NAME}`;
+            const miniAppUrl = getMiniAppDeepLink();
             
             const message = 
               `🎉 <b>Топқа жаңа адам қосылды!</b>\n\n` +

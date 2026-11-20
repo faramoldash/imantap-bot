@@ -140,6 +140,25 @@ export async function createIndexes() {
     await cp.createIndex({ contestId: 1, userId: 1 }, { unique: true });
     console.log('✅ Index: contest_participants unique participant');
 
+    // ✅ Кружки (Circles)
+    const circles = db.collection('circles');
+    await circles.createIndex({ circleId: 1 }, { unique: true });
+    console.log('✅ Index: circles.circleId');
+
+    await circles.createIndex({ inviteCode: 1 }, { unique: true });
+    console.log('✅ Index: circles.inviteCode');
+
+    await circles.createIndex({ ownerId: 1 });
+    console.log('✅ Index: circles.ownerId');
+
+    await circles.createIndex({ 'members.userId': 1 });
+    console.log('✅ Index: circles.members.userId');
+
+    // ✅ Администраторы / менеджеры (Admins)
+    const admins = db.collection('admins');
+    await admins.createIndex({ telegramId: 1 }, { unique: true });
+    console.log('✅ Index: admins.telegramId');
+
     console.log('🎉 Все индексы успешно созданы!');
   } catch (error) {
     console.error('❌ Ошибка создания индексов:', error);
