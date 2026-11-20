@@ -15,52 +15,121 @@ import { SHAWWAL_START_DATE, SHAWWAL_END_DATE, getMiniAppDeepLink } from './conf
 import { getKazakhstanCities } from './utils/cityMapping.js';
 import { verifyTelegramInitData } from './utils/telegramAuth.js';
 
-export function startApiServer({ bot, port, miniAppUrl, checkRateLimit }) {
-  if (!process.env.BOT_USERNAME?.trim() || !process.env.MINI_APP_NAME?.trim()) {
-    console.warn(
-      `⚠️ BOT_USERNAME или MINI_APP_NAME не заданы в .env — для Telegram-диплинков используется фолбэк: ${getMiniAppDeepLink()}`
-    );
+const TELEGRAM_ALLOWED_ORIGINS = [
+  'https://web.telegram.org',
+  'https://webk.telegram.org',
+  'https://webz.telegram.org',
+  'https://telegram.org',
+  'https://z.t.me',
+];
+
+const DEV_ALLOWED_ORIGINS = [
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+];
+
+function normalizeOrigin(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+export function buildAllowedOrigins({
+  miniAppUrl = process.env.MINI_APP_URL,
+  nodeEnv = process.env.NODE_ENV,
+  extraOrigins = process.env.CORS_ALLOWED_ORIGINS,
+} = {}) {
+  const allowed = new Set(TELEGRAM_ALLOWED_ORIGINS);
+
+  const normalizedMiniAppOrigin = normalizeOrigin(miniAppUrl);
+  if (normalizedMiniAppOrigin) {
+    allowed.add(normalizedMiniAppOrigin);
   }
 
-  const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url || '/', `http://localhost:${port}`);
-  
-  // ✅ РАСШИРЕННЫЕ CORS (включая Telegram origins)
-  const allowedOrigins = [
-    'https://imantap-production-6776.up.railway.app',
-    'https://web.telegram.org',
-    'https://z.t.me',
-    'https://telegram.org'
-  ];
-  
-  // Разрешаем в dev режиме
-  if (process.env.NODE_ENV !== 'production') {
-    allowedOrigins.push('http://localhost:3000', 'http://localhost:5173');
+  if (typeof extraOrigins === 'string' && extraOrigins.trim()) {
+    for (const raw of extraOrigins.split(',')) {
+      const normalized = normalizeOrigin(raw);
+      if (normalized) allowed.add(normalized);
+    }
   }
-  
-  const origin = req.headers.origin || req.headers.referer;
-  
-  // ✅ КРИТИЧНО: Telegram WebApp может не отправлять origin
-  const isTelegramRequest = !origin || 
-                           origin?.includes('t.me') || 
-                           origin?.includes('telegram') ||
-                           origin?.includes('railway.app');
-  
-  if (isTelegramRequest || allowedOrigins.some(allowed => origin?.includes(allowed))) {
-    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+
+  if (nodeEnv !== 'production') {
+    for (const devOrigin of DEV_ALLOWED_ORIGINS) {
+      allowed.add(devOrigin);
+    }
+  }
+
+  return allowed;
+}
+
+export function applyCorsHeaders(req, res, allowedOrigins) {
+  const originHeader = typeof req.headers.origin === 'string' ? req.headers.origin.trim() : '';
+
+  if (!originHeader) {
+    // Non-browser clients or native WebViews without Origin header:
+    // never emit Access-Control-Allow-Origin: * together with credentials.
+    if (req.method === 'OPTIONS') {
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Telegram-Init-Data');
+      res.statusCode = 204;
+      res.end();
+      return { handled: true, allowed: true };
+    }
+    return { handled: false, allowed: true };
+  }
+
+  res.setHeader('Vary', 'Origin');
+
+  if (allowedOrigins.has(originHeader)) {
+    res.setHeader('Access-Control-Allow-Origin', originHeader);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
-  } else {
-    // НЕ блокируем, просто логируем
-    console.log('⚠️ Unknown origin:', origin);
-    res.setHeader('Access-Control-Allow-Origin', '*');
+
+    if (req.method === 'OPTIONS') {
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Telegram-Init-Data');
+      res.setHeader('Access-Control-Max-Age', '86400');
+      res.statusCode = 204;
+      res.end();
+      return { handled: true, allowed: true };
+    }
+    return { handled: false, allowed: true };
   }
-  
-  // OPTIONS preflight
+
+  console.warn('⚠️ Blocked CORS origin:', originHeader);
   if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Telegram-Init-Data');
-    res.statusCode = 200;
-    res.end();
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.statusCode = 403;
+    res.end(JSON.stringify({ success: false, error: 'CORS origin not allowed' }));
+    return { handled: true, allowed: false };
+  }
+  return { handled: false, allowed: false };
+}
+
+export function createApiServer({
+  bot,
+  port = 8080,
+  miniAppUrl = process.env.MINI_APP_URL,
+  checkRateLimit = () => true,
+  botToken,
+  nodeEnv = process.env.NODE_ENV,
+  extraOrigins = process.env.CORS_ALLOWED_ORIGINS,
+} = {}) {
+  const allowedOrigins = buildAllowedOrigins({ miniAppUrl, nodeEnv, extraOrigins });
+
+  return http.createServer(async (req, res) => {
+  const url = new URL(req.url || '/', `http://localhost:${port}`);
+
+  const corsResult = applyCorsHeaders(req, res, allowedOrigins);
+  if (corsResult.handled) {
     return;
   }
   
@@ -79,8 +148,9 @@ export function startApiServer({ bot, port, miniAppUrl, checkRateLimit }) {
     // userId from URL/body is only a routing value and must match this identity.
     const isProtectedApi = url.pathname.startsWith('/api/') || url.pathname === '/shawwal-fast';
     const maxInitDataAgeSeconds = Number(process.env.TELEGRAM_INIT_DATA_MAX_AGE_SECONDS) || 24 * 60 * 60;
+    const effectiveBotToken = botToken ?? process.env.BOT_TOKEN;
     const telegramAuth = isProtectedApi
-      ? verifyTelegramInitData(req.headers['x-telegram-init-data'], process.env.BOT_TOKEN, maxInitDataAgeSeconds)
+      ? verifyTelegramInitData(req.headers['x-telegram-init-data'], effectiveBotToken, maxInitDataAgeSeconds)
       : null;
     if (isProtectedApi && !telegramAuth) {
       res.statusCode = 401;
@@ -847,7 +917,7 @@ export function startApiServer({ bot, port, miniAppUrl, checkRateLimit }) {
     // =====================================================
     // 🌙 SHAWWAL — отметить пост
     // =====================================================
-    if (req.method === 'POST' && req.url === '/shawwal-fast') {
+    if (req.method === 'POST' && url.pathname === '/shawwal-fast') {
       let body = '';
       req.on('data', chunk => body += chunk);
       req.on('end', async () => {
@@ -953,12 +1023,27 @@ export function startApiServer({ bot, port, miniAppUrl, checkRateLimit }) {
     res.end(JSON.stringify({ success: false, error: 'Internal Server Error' }));
   }
 });
+}
 
-// Запуск сервера
-server.listen(port, () => {
-  console.log(`✅ HTTP API Server running on port ${port}`);
-  console.log(`✅ Bot started successfully`);
-  console.log(`✅ Mini App URL: ${miniAppUrl}`);
-});
+export function startApiServer({ bot, port, miniAppUrl, checkRateLimit }) {
+  if (!process.env.BOT_USERNAME?.trim() || !process.env.MINI_APP_NAME?.trim()) {
+    console.warn(
+      `⚠️ BOT_USERNAME или MINI_APP_NAME не заданы в .env — для Telegram-диплинков используется фолбэк: ${getMiniAppDeepLink()}`
+    );
+  }
 
+  if (process.env.NODE_ENV === 'production' && !normalizeOrigin(miniAppUrl || process.env.MINI_APP_URL)) {
+    console.warn('⚠️ MINI_APP_URL не задан или некорректен — CORS может блокировать запросы Mini App');
+  }
+
+  const server = createApiServer({ bot, port, miniAppUrl, checkRateLimit });
+
+  // Запуск сервера
+  server.listen(port, () => {
+    console.log(`✅ HTTP API Server running on port ${port}`);
+    console.log(`✅ Bot started successfully`);
+    console.log(`✅ Mini App URL: ${miniAppUrl}`);
+  });
+
+  return server;
 }

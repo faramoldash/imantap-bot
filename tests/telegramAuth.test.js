@@ -43,3 +43,22 @@ test('rejects expired Telegram initData', () => {
 
   assert.equal(verifyTelegramInitData(initData, BOT_TOKEN), null);
 });
+
+test('rejects missing, malformed, or wrong-token Telegram initData', () => {
+  const valid = createInitData({
+    auth_date: String(Math.floor(Date.now() / 1000)),
+    user: JSON.stringify({ id: 12345 }),
+  });
+
+  assert.equal(verifyTelegramInitData('', BOT_TOKEN), null);
+  assert.equal(verifyTelegramInitData(undefined, BOT_TOKEN), null);
+  assert.equal(verifyTelegramInitData(valid, ''), null);
+  assert.equal(verifyTelegramInitData(valid, '999999:wrong-token'), null);
+
+  const nonHexHash = new URLSearchParams({
+    auth_date: String(Math.floor(Date.now() / 1000)),
+    user: JSON.stringify({ id: 12345 }),
+    hash: 'z'.repeat(64),
+  }).toString();
+  assert.equal(verifyTelegramInitData(nonHexHash, BOT_TOKEN), null);
+});

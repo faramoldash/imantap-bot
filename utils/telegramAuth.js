@@ -13,7 +13,8 @@ export function verifyTelegramInitData(initData, botToken, maxAgeSeconds = 24 * 
     const authDate = Number(params.get('auth_date'));
     const userJson = params.get('user');
 
-    if (!receivedHash || !authDate || !userJson) return null;
+    if (!receivedHash || !/^[a-f0-9]{64}$/i.test(receivedHash)) return null;
+    if (!Number.isFinite(authDate) || authDate <= 0 || !userJson) return null;
     if (Date.now() / 1000 - authDate > maxAgeSeconds) return null;
 
     params.delete('hash');
