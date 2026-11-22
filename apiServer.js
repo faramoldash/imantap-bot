@@ -233,6 +233,7 @@ export function createApiServer({
         res.end(JSON.stringify({
           success: true,
           hasAccess: access.hasAccess,
+          accessType: access.accessType,
           paymentStatus: access.paymentStatus,
           demoExpires: access.demoExpires,
           subscriptionExpires: access.subscriptionExpires,
@@ -269,6 +270,7 @@ export function createApiServer({
         res.end(JSON.stringify({
           success: true,
           hasAccess: access.hasAccess,
+          accessType: access.accessType,
           paymentStatus: access.paymentStatus,
           demoExpires: access.demoExpires,
           subscriptionExpires: access.subscriptionExpires,
@@ -380,7 +382,7 @@ export function createApiServer({
       }
       if (!requireCurrentUser(userId)) return;
 
-      const userData = await getUserFullData(userId);
+      const userData = await getUserFullDataFn(userId, { db: getDb(), now: nowFn() });
       res.statusCode = 200;
       res.end(JSON.stringify({ success: true, data: userData }));
       return;
@@ -398,7 +400,7 @@ export function createApiServer({
       if (!requireCurrentUser(userId)) return;
       
       try {
-        const userData = await getUserFullData(userId);
+        const userData = await getUserFullDataFn(userId, { db: getDb(), now: nowFn() });
         res.statusCode = 200;
         res.end(JSON.stringify({ success: true, data: userData }));
         return;

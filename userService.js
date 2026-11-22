@@ -1,6 +1,7 @@
 // userService.js
 import { getDB } from './db.js';
 import { addContestXp } from './services/contestService.js';
+import { isMainAdmin, isAdmin } from './adminService.js';
 import {
   RAMADAN_START_DATE, PREPARATION_START_DATE,
   EID_AL_FITR_DATE, EID_AL_FITR_MS,
@@ -683,13 +684,15 @@ async function _updateUserProgressLocked(userId, progressData, deps = {}) {
  */
 async function getUserFullData(userId, deps = {}) {
   try {
+    const uid = parseInt(userId, 10);
     const db = deps.db || getDB();
-    const user = await db.collection('users').findOne({ userId: parseInt(userId, 10) });
+    const user = await db.collection('users').findOne({ userId: uid });
     if (!user) return null;
 
     const now = deps.now ? new Date(deps.now) : new Date();
     const subExpires = user.subscriptionExpiresAt ? new Date(user.subscriptionExpiresAt) : null;
     const hasValidSubExpires = subExpires && !Number.isNaN(subExpires.getTime());
+    const userIsAdmin = isMainAdmin(uid) || await isAdmin(uid, { db });
 
     return {
       userId: user.userId,
@@ -701,8 +704,8 @@ async function getUserFullData(userId, deps = {}) {
       photoUrl: user.photoUrl,
       startDate: user.startDate,
       registrationDate: user.createdAt || user.registrationDate,
-      paymentStatus: user.paymentStatus || 'unpaid',
-      accessType: user.accessType || null,
+      paymentStatus: userIsAdmin ? 'paid' : (user.paymentStatus || 'unpaid'),
+      accessType: userIsAdmin ? 'full' : (user.accessType || null),
       demoExpiresAt: user.demoExpiresAt || null,
       progress: user.progress || {},
       preparationProgress: user.preparationProgress || {},
@@ -1149,13 +1152,17 @@ async function getUserAccess(userId, deps = {}) {
     return { hasAccess: false, paymentStatus: 'unpaid', reason: 'invalid_user_id' };
   }
 
-  const mainAdminRaw = process.env.MAIN_ADMIN_ID;
-  const mainAdmin = mainAdminRaw ? parseInt(String(mainAdminRaw).trim(), 10) : NaN;
-  if (Number.isInteger(mainAdmin) && uid === mainAdmin) {
-    return { hasAccess: true, paymentStatus: 'paid', reason: 'admin_access' };
+  // Главный админ (MAIN_ADMIN_ID) всегда имеет полный доступ — даже в чистой БД
+  if (isMainAdmin(uid)) {
+    return { hasAccess: true, accessType: 'full', paymentStatus: 'paid', reason: 'admin' };
   }
 
   const db = deps.db || getDB();
+  // Менеджеры из коллекции admins также всегда имеют полный доступ без Paywall
+  if (await isAdmin(uid, { db })) {
+    return { hasAccess: true, accessType: 'full', paymentStatus: 'paid', reason: 'admin' };
+  }
+
   const now = deps.now ? new Date(deps.now) : new Date();
   const user = await db.collection('users').findOne({ userId: uid });
   if (!user) return { hasAccess: false, paymentStatus: 'unpaid', reason: 'user_not_found' };

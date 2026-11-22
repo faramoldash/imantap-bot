@@ -713,3 +713,103 @@ test('adminService enforces MAIN_ADMIN_ID vs manager permissions strictly', asyn
     process.env.MAIN_ADMIN_ID = prevMainAdmin;
   }
 });
+
+test('main admin and manager always get full access without subscription (even in empty DB)', async () => {
+  const prevMainAdmin = process.env.MAIN_ADMIN_ID;
+  process.env.MAIN_ADMIN_ID = '777000';
+  try {
+    // Чистая БД: в users нет ни главного админа, ни менеджера; менеджер только в admins
+    const db = createMockDb({
+      users: [
+        { userId: 888002, paymentStatus: 'unpaid', accessType: null },
+      ],
+      admins: [
+        { telegramId: 888001, role: 'manager', addedBy: 777000 },
+        { telegramId: 888002, role: 'manager', addedBy: 777000 },
+      ],
+    });
+
+    // 1. Главный админ — отсутствует в коллекции users (чистая БД)
+    const mainAccess = await getUserAccess(777000, { db });
+    assert.deepEqual(mainAccess, {
+      hasAccess: true,
+      accessType: 'full',
+      paymentStatus: 'paid',
+      reason: 'admin',
+    });
+
+    // 2. Менеджер — отсутствует в коллекции users (чистая БД)
+    const mgrCleanAccess = await getUserAccess(888001, { db });
+    assert.deepEqual(mgrCleanAccess, {
+      hasAccess: true,
+      accessType: 'full',
+      paymentStatus: 'paid',
+      reason: 'admin',
+    });
+
+    // 3. Менеджер — есть в users со статусом unpaid
+    const mgrUnpaidAccess = await getUserAccess(888002, { db });
+    assert.deepEqual(mgrUnpaidAccess, {
+      hasAccess: true,
+      accessType: 'full',
+      paymentStatus: 'paid',
+      reason: 'admin',
+    });
+
+    // 4. End-to-end через HTTP API: /api/check-access, /api/user/:id/access и /api/user/:id/full
+    const server = createApiServer({
+      bot: { sendMessage: async () => {} },
+      botToken: BOT_TOKEN,
+      checkRateLimit: () => true,
+      getDb: () => db,
+    });
+
+    for (const adminId of [777000, 888001, 888002]) {
+      const initData = createSignedInitData(adminId);
+
+      const checkRes = await invokeServer(server, {
+        method: 'GET',
+        url: `/api/check-access?userId=${adminId}`,
+        headers: { 'X-Telegram-Init-Data': initData },
+      });
+      assert.equal(checkRes.status, 200);
+      const checkBody = checkRes.json();
+      assert.equal(checkBody.hasAccess, true);
+      assert.equal(checkBody.accessType, 'full');
+      assert.equal(checkBody.paymentStatus, 'paid');
+      assert.equal(checkBody.reason, 'admin');
+
+      const accessRes = await invokeServer(server, {
+        method: 'GET',
+        url: `/api/user/${adminId}/access`,
+        headers: { 'X-Telegram-Init-Data': initData },
+      });
+      assert.equal(accessRes.status, 200);
+      const accessBody = accessRes.json();
+      assert.equal(accessBody.hasAccess, true);
+      assert.equal(accessBody.accessType, 'full');
+      assert.equal(accessBody.paymentStatus, 'paid');
+      assert.equal(accessBody.reason, 'admin');
+
+      const fullRes = await invokeServer(server, {
+        method: 'GET',
+        url: `/api/user/${adminId}/full`,
+        headers: { 'X-Telegram-Init-Data': initData },
+      });
+      assert.equal(fullRes.status, 200);
+      assert.equal(fullRes.json().success, true);
+      if (adminId === 888002) {
+        assert.equal(fullRes.json().data.paymentStatus, 'paid');
+        assert.equal(fullRes.json().data.accessType, 'full');
+      }
+    }
+
+    // 5. После удаления менеджера 888002 доступ откатывается к обычному unpaid
+    await removeManager(888002, 777000, { db });
+    const afterRemove = await getUserAccess(888002, { db });
+    assert.equal(afterRemove.hasAccess, false);
+    assert.equal(afterRemove.paymentStatus, 'unpaid');
+  } finally {
+    process.env.MAIN_ADMIN_ID = prevMainAdmin;
+  }
+});
