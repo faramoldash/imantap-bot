@@ -1,5 +1,6 @@
 import schedule from 'node-schedule';
 import { getDB } from './db.js';
+import { buildOpenAppInlineMarkup } from './utils/miniAppKeyboard.js';
 import {
   updateUserPrayerTimes,
   resolveSafeTimezone,
@@ -169,13 +170,7 @@ export function registerCoreSchedulers({
 
           await bot.sendMessage(user.userId, message, {
             parse_mode: 'Markdown',
-            reply_markup: {
-              keyboard: [[{
-                text: '📱 ImanTap ашу',
-                web_app: { url: `${miniAppUrl}?tgWebAppStartParam=${user.userId}` }
-              }]],
-              resize_keyboard: true
-            }
+            reply_markup: buildOpenAppInlineMarkup(miniAppUrl, '📱 ImanTap ашу')
           });
 
           console.log(`📊 Напоминание → User ${user.userId} (${userTimezone}, ${currentHour}:00)`);

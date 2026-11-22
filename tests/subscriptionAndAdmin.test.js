@@ -5,6 +5,7 @@
 
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
 
@@ -40,6 +41,15 @@ const {
   createApiServer,
   sanitizeSyncPayload,
 } = await import('../apiServer.js');
+
+const {
+  normalizeMiniAppUrl,
+  buildOpenAppInlineMarkup,
+  MAIN_REPLY_KEYBOARD,
+  DEMO_REPLY_KEYBOARD,
+  REJECT_DEMO_REPLY_KEYBOARD,
+  NO_GEO_REPLY_KEYBOARD,
+} = await import('../utils/miniAppKeyboard.js');
 
 const BOT_TOKEN = '123456:module7-test-token';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -812,4 +822,43 @@ test('main admin and manager always get full access without subscription (even i
   } finally {
     process.env.MAIN_ADMIN_ID = prevMainAdmin;
   }
+});
+
+test('Mini App launch buttons use native inline web_app without tgWebAppStartParam and reply keyboards have no web_app', () => {
+  // 1. normalizeMiniAppUrl убирает tgWebAppStartParam и пробелы
+  assert.equal(
+    normalizeMiniAppUrl('  https://imantap-production-6776.up.railway.app?tgWebAppStartParam=12345  '),
+    'https://imantap-production-6776.up.railway.app'
+  );
+  assert.equal(
+    normalizeMiniAppUrl('https://imantap.kz/app?foo=1&tgWebAppStartParam=999'),
+    'https://imantap.kz/app?foo=1'
+  );
+
+  // 2. Inline web_app кнопка — единственный формат, передающий подписанный initData
+  const markup = buildOpenAppInlineMarkup('https://imantap.kz?tgWebAppStartParam=123', '📱 ImanTap ашу');
+  assert.equal(Array.isArray(markup.inline_keyboard), true);
+  assert.equal(markup.keyboard, undefined);
+  assert.deepEqual(markup.inline_keyboard[0][0], {
+    text: '📱 ImanTap ашу',
+    web_app: { url: 'https://imantap.kz' },
+  });
+
+  // 3. Ни одна Reply-клавиатура не содержит web_app кнопок (Telegram не передаёт initData для reply web_app!)
+  for (const kb of [MAIN_REPLY_KEYBOARD, DEMO_REPLY_KEYBOARD, REJECT_DEMO_REPLY_KEYBOARD, NO_GEO_REPLY_KEYBOARD]) {
+    assert.equal(Array.isArray(kb.keyboard), true);
+    for (const row of kb.keyboard) {
+      for (const btn of row) {
+        if (btn && typeof btn === 'object') {
+          assert.equal(btn.web_app, undefined, `Reply keyboard button must not have web_app: ${JSON.stringify(btn)}`);
+        }
+      }
+    }
+  }
+
+  // 4. Регрессионная проверка bot.js и schedulerService.js: нигде не осталось tgWebAppStartParam
+  const botSource = fs.readFileSync(new URL('../bot.js', import.meta.url), 'utf8');
+  const schedulerSource = fs.readFileSync(new URL('../schedulerService.js', import.meta.url), 'utf8');
+  assert.equal(botSource.includes('tgWebAppStartParam'), false, 'bot.js must not append tgWebAppStartParam to MINI_APP_URL');
+  assert.equal(schedulerSource.includes('tgWebAppStartParam'), false, 'schedulerService.js must not append tgWebAppStartParam');
 });

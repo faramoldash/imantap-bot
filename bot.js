@@ -52,6 +52,14 @@ import {
   getSessionData,
   clearSession
 } from './sessionManager.js';
+import {
+  normalizeMiniAppUrl,
+  buildOpenAppInlineMarkup,
+  MAIN_REPLY_KEYBOARD,
+  DEMO_REPLY_KEYBOARD,
+  REJECT_DEMO_REPLY_KEYBOARD,
+  NO_GEO_REPLY_KEYBOARD,
+} from './utils/miniAppKeyboard.js';
 import schedule from 'node-schedule';
 import {
   createContest, activateContest, getActiveContest,
@@ -161,7 +169,7 @@ if (!process.env.BOT_TOKEN) {
 }
 
 const token = process.env.BOT_TOKEN;
-const MINI_APP_URL = process.env.MINI_APP_URL || "https://imantap-production-6776.up.railway.app";
+const MINI_APP_URL = normalizeMiniAppUrl(process.env.MINI_APP_URL || "https://imantap-production-6776.up.railway.app");
 const PORT = process.env.PORT || 8080;
 
 // Создаём бота с polling и явным удалением webhook
@@ -181,6 +189,52 @@ bot.deleteWebHook().then(() => {
 }).catch(() => {
   console.log('ℹ️ Webhook не был установлен, используется polling');
 });
+
+// Настраиваем нативную Menu Button на чистый MINI_APP_URL (передаёт валидный initData)
+bot.setChatMenuButton({
+  menu_button: {
+    type: 'web_app',
+    text: 'ImanTap',
+    web_app: { url: MINI_APP_URL },
+  },
+}).then(() => {
+  console.log(`✅ Menu Button настроен: ${MINI_APP_URL}`);
+}).catch((err) => {
+  console.warn('⚠️ Не удалось настроить Menu Button:', err.message);
+});
+
+/**
+ * Отправляет сообщение и нативную inline-кнопку web_app (которая передаёт валидный signed initData).
+ * Если передана replyKeyboard, сначала обновляет нижнюю клавиатуру (без web_app кнопок, чтобы
+ * затереть старые кэшированные reply-кнопки), а следом отправляет inline-кнопку запуска Mini App.
+ */
+async function sendWithOpenAppButton(
+  chatId,
+  text,
+  {
+    parse_mode,
+    replyKeyboard = null,
+    buttonText = '📱 ImanTap ашу',
+    launcherText = '👇 Трекерді ашу үшін төмендегі батырманы басыңыз:',
+  } = {}
+) {
+  const baseOptions = parse_mode ? { parse_mode } : {};
+  if (replyKeyboard) {
+    await bot.sendMessage(chatId, text, {
+      ...baseOptions,
+      reply_markup: replyKeyboard,
+    });
+    await bot.sendMessage(chatId, launcherText, {
+      reply_markup: buildOpenAppInlineMarkup(MINI_APP_URL, buttonText),
+    });
+    return;
+  }
+
+  await bot.sendMessage(chatId, text, {
+    ...baseOptions,
+    reply_markup: buildOpenAppInlineMarkup(MINI_APP_URL, buttonText),
+  });
+}
 
 // Обработчики ошибок polling (критично для стабильности)
 bot.on('polling_error', (error) => {
@@ -966,32 +1020,23 @@ bot.on('callback_query', async (query) => {
 
       // Уведомляем пользователя (ошибка доставки не должна прерывать начисление реферального бонуса)
       try {
-        await bot.sendMessage(
+        await sendWithOpenAppButton(
           targetUserId,
           isRu
             ? `🎉 *Оплата подтверждена!*\n\n` +
               `Добро пожаловать в ImanTap Premium! 🌙\n\n` +
               `📅 *Срок подписки: 90 дней*\n` +
-              `Действует до: ${formattedExpiry}\n\n` +
-              `Нажмите кнопку ниже, чтобы открыть трекер:`
+              `Действует до: ${formattedExpiry}`
             : `🎉 *Төлем расталды!*\n\n` +
               `ImanTap Premium-ға қош келдіңіз! 🌙\n\n` +
               `📅 *Жазылым мерзімі: 90 күн*\n` +
-              `Аяқталу күні: ${formattedExpiry}\n\n` +
-              `Трекерді ашу үшін төмендегі батырманы басыңыз:`,
+              `Аяқталу күні: ${formattedExpiry}`,
           {
             parse_mode: 'Markdown',
-            reply_markup: {
-              keyboard: [
-                [{
-                  text: '📱 ImanTap ашу',
-                  web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${targetUserId}` }
-                }],
-                ['⚙️ Баптаулар', '📊 XP'],
-                ['📈 Статистика', '🎁 Менің промокодым']
-              ],
-              resize_keyboard: true
-            }
+            replyKeyboard: MAIN_REPLY_KEYBOARD,
+            launcherText: isRu
+              ? '👇 Нажмите кнопку ниже, чтобы открыть трекер:'
+              : '👇 Трекерді ашу үшін төмендегі батырманы басыңыз:',
           }
         );
       } catch (notifyErr) {
@@ -1107,9 +1152,10 @@ bot.on('callback_query', async (query) => {
 
       // ✅ РАЗНЫЕ СООБЩЕНИЯ в зависимости от статуса демо
       let messageText;
-      let keyboard;
+      let hasDemoAccess = false;
 
       if (result.demoStatus === 'given_new') {
+        hasDemoAccess = true;
         // ✅ Первое отклонение - дали новый демо
         messageText = isRu
           ? `❌ *Оплата не подтверждена*\n\n` +
@@ -1131,15 +1177,8 @@ bot.on('callback_query', async (query) => {
             `${hasPromo ? `💰 Промокод сақталды: *-500₸ жеңілдік*\n\n` : ''}` +
             `Дұрыс чекті жіберу үшін төмендегі батырманы басыңыз:`;
 
-        keyboard = [
-          [{
-            text: '📱 ImanTap ашу',
-            web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${targetUserId}` }
-          }],
-          [{ text: '💳 Қайта төлем жасау' }]
-        ];
-
       } else if (result.demoStatus === 'active') {
+        hasDemoAccess = true;
         // ✅ Демо ещё активен - показываем сколько осталось
         const hoursLeft = Math.max(1, Math.ceil((new Date(result.demoExpiresAt) - new Date()) / (1000 * 60 * 60)));
 
@@ -1154,14 +1193,6 @@ bot.on('callback_query', async (query) => {
             `⏳ *Demo-режимде ${hoursLeft} сағат қалды*\n\n` +
             `${hasPromo ? `💰 Промокод сақталды: *-500₸ жеңілдік*\n\n` : ''}` +
             `Дұрыс чекпен қайталап жіберіңіз:`;
-
-        keyboard = [
-          [{
-            text: '📱 ImanTap ашу',
-            web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${targetUserId}` }
-          }],
-          [{ text: '💳 Қайта төлем жасау' }]
-        ];
 
       } else {
         // ✅ Демо уже давали раньше и истёк - не даём повторно
@@ -1178,24 +1209,30 @@ bot.on('callback_query', async (query) => {
             `${hasPromo ? `💰 Промокод сақталды: *-500₸ жеңілдік*\n\n` : ''}` +
             `Дұрыс чекпен қайталап жіберіңіз немесе қолдау қызметіне жазыңыз:\n` +
             `👉 @ImanTapSupport`;
-
-        keyboard = [
-          [{ text: '💳 Қайта төлем жасау' }]
-        ];
       }
 
       try {
-        await bot.sendMessage(
-          targetUserId,
-          messageText,
-          {
+        if (hasDemoAccess) {
+          await sendWithOpenAppButton(targetUserId, messageText, {
             parse_mode: 'Markdown',
-            reply_markup: {
-              keyboard: keyboard,
-              resize_keyboard: true
+            replyKeyboard: REJECT_DEMO_REPLY_KEYBOARD,
+            launcherText: isRu
+              ? '👇 Открыть трекер в демо-режиме:'
+              : '👇 Трекерді демо-режимде ашу:',
+          });
+        } else {
+          await bot.sendMessage(
+            targetUserId,
+            messageText,
+            {
+              parse_mode: 'Markdown',
+              reply_markup: {
+                keyboard: [[{ text: '💳 Қайта төлем жасау' }]],
+                resize_keyboard: true
+              }
             }
-          }
-        );
+          );
+        }
       } catch (notifyErr) {
         console.error(`❌ Не удалось уведомить пользователя ${targetUserId} об отклонении оплаты:`, notifyErr.message);
       }
@@ -1543,21 +1580,15 @@ bot.on('location', async (msg) => {
       // ✅ 7. Если это смена города
       if (state === 'CHANGING_CITY') {
         const user = await getUserById(userId);
-        await bot.sendMessage(chatId,
+        await sendWithOpenAppButton(
+          chatId,
           `✅ Орныңыз сақталды: *${city}*\n\n` +
           `⏰ Намаз уақыттары:\n` +
           `🌅 Таң намазы: ${user?.prayerTimes?.fajr || 'анықталмады'}\n` +
           `🌆 Ақшам намазы: ${user?.prayerTimes?.maghrib || 'анықталмады'}`,
           {
             parse_mode: 'Markdown',
-            reply_markup: {
-              keyboard: [
-                [{ text: '📱 ImanTap ашу', web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` } }],
-                ['⚙️ Баптаулар', '📊 XP'],
-                ['📈 Статистика', '🎁 Менің промокодым']
-              ],
-              resize_keyboard: true
-            }
+            replyKeyboard: MAIN_REPLY_KEYBOARD,
           }
         );
         clearSession(userId);
@@ -1587,6 +1618,15 @@ bot.on('message', async (msg) => {
   }
 
   // 🎯 ОБРАБОТКА КНОПОК-КОМАНД
+  if (text === '📱 ImanTap ашу' || text === '📱 Рамазан трекерін ашу') {
+    await bot.sendMessage(
+      chatId,
+      '👇 Трекерді ашу үшін төмендегі батырманы басыңыз:',
+      { reply_markup: buildOpenAppInlineMarkup(MINI_APP_URL, '📱 ImanTap ашу') }
+    );
+    return;
+  }
+
   if (text === '⚙️ Баптаулар') {
     // Показываем настройки
     try {
@@ -1732,17 +1772,7 @@ bot.on('message', async (msg) => {
   if (state === 'CHANGING_CITY') {
     if (text === '❌ Болдырмау') {
       await bot.sendMessage(chatId, 'Болдырылды ✅', {
-        reply_markup: {
-          keyboard: [
-            [{
-              text: '📱 ImanTap ашу',
-              web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
-            }],
-            ['⚙️ Баптаулар', '📊 XP'],
-            ['📈 Статистика', '🎁 Менің промокодым']
-          ],
-          resize_keyboard: true
-        }
+        reply_markup: MAIN_REPLY_KEYBOARD,
       });
       clearSession(userId);
       return;
@@ -1801,22 +1831,10 @@ bot.on('message', async (msg) => {
     
     // ✅ ПРОВЕРКА: Если уже оплачено
     if (user.paymentStatus === 'paid') {
-      await bot.sendMessage(
+      await sendWithOpenAppButton(
         chatId,
         `✅ Сізде қазірдің өзінде Premium бар!\n\nMini App-ты ашыңыз:`,
-        {
-          reply_markup: {
-            keyboard: [
-              [{
-                text: '📱 ImanTap ашу',
-                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
-              }],
-              ['⚙️ Баптаулар', '📊 XP'],
-              ['📈 Статистика', '🎁 Менің промокодым']
-            ],
-            resize_keyboard: true
-          }
-        }
+        { replyKeyboard: MAIN_REPLY_KEYBOARD }
       );
       return;
     }
@@ -1867,45 +1885,23 @@ bot.on('message', async (msg) => {
         if (!demoResult.activated) {
           if (demoResult.reason === 'already_active' && demoResult.demoExpiresAt) {
             const hoursLeft = Math.max(1, Math.ceil((demoResult.demoExpiresAt - new Date()) / (1000 * 60 * 60)));
-            await bot.sendMessage(
+            await sendWithOpenAppButton(
               chatId,
               `⚠️ Демо-режим қазірдің өзінде қосулы!\n\n` +
-              `⏳ Қалған уақыт: ${hoursLeft} сағат\n\n` +
-              `Трекерді пайдаланыңыз:`,
+              `⏳ Қалған уақыт: ${hoursLeft} сағат`,
               {
                 parse_mode: 'Markdown',
-                reply_markup: {
-                  keyboard: [
-                    [{
-                      text: '📱 ImanTap ашу',
-                      web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
-                    }],
-                    [{ text: '💳 Толық нұсқаны сатып алу' }]
-                  ],
-                  resize_keyboard: true
-                }
+                replyKeyboard: DEMO_REPLY_KEYBOARD,
               }
             );
             return;
           }
 
           if (demoResult.reason === 'already_paid') {
-            await bot.sendMessage(
+            await sendWithOpenAppButton(
               chatId,
-              `✅ Сізде қазірдің өзінде Premium бар!\n\nMini App-ты ашыңыз:`,
-              {
-                reply_markup: {
-                  keyboard: [
-                    [{
-                      text: '📱 ImanTap ашу',
-                      web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
-                    }],
-                    ['⚙️ Баптаулар', '📊 XP'],
-                    ['📈 Статистика', '🎁 Менің промокодым']
-                  ],
-                  resize_keyboard: true
-                }
-              }
+              `✅ Сізде қазірдің өзінде Premium бар!`,
+              { replyKeyboard: MAIN_REPLY_KEYBOARD }
             );
             return;
           }
@@ -1927,23 +1923,15 @@ bot.on('message', async (msg) => {
           return;
         }
 
-        await bot.sendMessage(
+        await sendWithOpenAppButton(
           chatId,
           `✅ *Demo-режим қосылды!* 🎉\n\n` +
           `⏳ 24 сағат бойы толық функционал қолжетімді.\n\n` +
           `🚀 Трекерді пайдаланып көріңіз!`,
           {
             parse_mode: 'Markdown',
-            reply_markup: {
-              keyboard: [
-                [{
-                  text: '📱 Рамазан трекерін ашу',
-                  web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
-                }],
-                [{ text: '💳 Толық нұсқаны сатып алу' }]
-              ],
-              resize_keyboard: true
-            }
+            replyKeyboard: DEMO_REPLY_KEYBOARD,
+            buttonText: '📱 ImanTap ашу',
           }
         );
 
@@ -2809,22 +2797,14 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
         console.log('✅ Админ автоматически получил доступ');
       }
       
-      // Показываем приветствие
-      bot.sendMessage(
+      // Показываем приветствие: сбрасываем старую reply-клавиатуру и даём нативную inline web_app кнопку (с валидным initData)
+      await sendWithOpenAppButton(
         chatId,
         `Ассаляму Алейкум, ${from.first_name}! 👑\n\n` +
-        `Вы администратор ImanTap.\n\n` +
-        `Трекерді ашу үшін төмендегі батырманы басыңыз:`,
+        `Вы администратор ImanTap.`,
         {
-          reply_markup: {
-            keyboard: [
-              [{
-                text: "📱 Рамазан трекерін ашу",
-                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
-              }]
-            ],
-            resize_keyboard: true
-          }
+          replyKeyboard: MAIN_REPLY_KEYBOARD,
+          buttonText: '📱 ImanTap ашу',
         }
       );
       return;
@@ -2840,24 +2820,16 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
     // 🎁 DEMO РЕЖИМ - показываем кнопку покупки
     if (user.accessType === 'demo' && user.demoExpiresAt && new Date() < new Date(user.demoExpiresAt)) {
       const hoursLeft = Math.floor((new Date(user.demoExpiresAt) - new Date()) / (1000 * 60 * 60));
-      
-      bot.sendMessage(
+
+      await sendWithOpenAppButton(
         chatId,
         `Сәлем, ${from.first_name}! 👋\n\n` +
         `🎁 *Demo-режим қосулы* (${hoursLeft} сағат қалды)\n\n` +
         `Толық нұсқаға өту үшін төлем жасаңыз 👇`,
         {
           parse_mode: 'Markdown',
-          reply_markup: {
-            keyboard: [
-              [{
-                text: "📱 Рамазан трекерін ашу",
-                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` } // ✅ userId (НЕ targetUserId)
-              }],
-              [{ text: "💳 Толық нұсқаны сатып алу" }] // ✅ Точный текст
-            ],
-            resize_keyboard: true
-          }
+          replyKeyboard: DEMO_REPLY_KEYBOARD,
+          buttonText: '📱 ImanTap ашу',
         }
       );
       return;
@@ -2885,23 +2857,13 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
 
     // 🔥 ПРОВЕРКА 1: Если пользователь УЖЕ завершил онбординг И оплатил
     if (user.onboardingCompleted && user.paymentStatus === 'paid') {
-      bot.sendMessage(
+      await sendWithOpenAppButton(
         chatId,
         `Ассаляму Алейкум, ${from.first_name}! 🤲\n\n` +
-        `ImanTap-қа қайта қош келдіңіз!\n\n` +
-        `Трекерді ашу үшін төмендегі батырманы басыңыз:`,
+        `ImanTap-қа қайта қош келдіңіз!`,
         {
-          reply_markup: {
-            keyboard: [
-              [{
-                text: '📱 ImanTap ашу',
-                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
-              }],
-              ['⚙️ Баптаулар', '📊 XP'],
-              ['📈 Статистика', '🎁 Менің промокодым']
-            ],
-            resize_keyboard: true
-          }
+          replyKeyboard: MAIN_REPLY_KEYBOARD,
+          buttonText: '📱 ImanTap ашу',
         }
       );
       return;
@@ -2946,23 +2908,10 @@ bot.onText(/\/start(?:\s+(.+))?/, async (msg, match) => {
     if (param === 'payment') {
       // Если уже оплатил - говорим об этом
       if (user.paymentStatus === 'paid') {
-        await bot.sendMessage(
+        await sendWithOpenAppButton(
           chatId,
-          `✅ Сізде қазірдің өзінде Premium бар!\n\n` +
-          `Mini App-ты ашыңыз:`,
-          {
-            reply_markup: {
-              keyboard: [
-                [{
-                  text: '📱 ImanTap ашу',
-                  web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
-                }],
-                ['⚙️ Баптаулар', '📊 XP'],
-                ['📈 Статистика', '🎁 Менің промокодым']
-              ],
-              resize_keyboard: true
-            }
-          }
+          `✅ Сізде қазірдің өзінде Premium бар!`,
+          { replyKeyboard: MAIN_REPLY_KEYBOARD }
         );
         return;
       }
@@ -3189,19 +3138,9 @@ bot.onText(/\/xp/, async (msg) => {
       `• Реферал төлем жасаса: +400 XP\n\n` +
       `💡 *Кеңес:* Streak үзілмеуі үшін күн сайын кем дегенде 1 тапсырманы орындаңыз!`;
 
-    await bot.sendMessage(chatId, message, { 
+    await bot.sendMessage(chatId, message, {
       parse_mode: 'Markdown',
-      reply_markup: {
-        keyboard: [
-          [{
-            text: '📱 ImanTap ашу',
-            web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${userId}` }
-          }],
-          ['⚙️ Баптаулар', '📊 XP'],
-          ['📈 Статистика', '🎁 Менің промокодым']
-        ],
-        resize_keyboard: true
-      }
+      reply_markup: buildOpenAppInlineMarkup(MINI_APP_URL, '📱 ImanTap ашу'),
     });
 
   } catch (error) {
@@ -3895,17 +3834,7 @@ bot.onText(/\/admin_notify_no_geo/, async (msg) => {
 
         await bot.sendMessage(user.userId, message, {
           parse_mode: 'Markdown',
-          reply_markup: {
-            keyboard: [
-              ['⚙️ Баптаулар'],
-              [{
-                text: '📱 ImanTap ашу',
-                web_app: { url: `${MINI_APP_URL}?tgWebAppStartParam=${user.userId}` }
-              }],
-              ['📈 Статистика', '🎁 Менің промокодым']
-            ],
-            resize_keyboard: true
-          }
+          reply_markup: NO_GEO_REPLY_KEYBOARD,
         });
 
         sent++;
